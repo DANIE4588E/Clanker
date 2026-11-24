@@ -55,7 +55,8 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test:remote": "node --test scripts/test-remote-*.mjs"
+    "test:remote": "node --test scripts/test-remote-*.mjs",
+    "test:subscriptions": "node --test scripts/test-subscriptions.mjs"
   },
   "private": true,
   "reanimated": {

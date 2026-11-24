@@ -1,4 +1,20 @@
-export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'gemini';
+export type SubscriptionType = 'codex' | 'claude';
+
+export type SubscriptionRouting = 'auto' | 'manual';
+
+export type SubscriptionAccount = {
+  id: string;
+  label: string;
+  email?: string;
+  plan?: string;
+  addedAt: number;
+};
+
+export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'gemini' | SubscriptionType;
+
+export function isSubscriptionType(type: ProviderType): type is SubscriptionType {
+  return type === 'codex' || type === 'claude';
+}
 
 export type ImagePart = {
   type: 'image';
@@ -185,6 +201,16 @@ export interface Endpoint {
   effortParam?: EffortParam;
   /** Extra HTTP headers sent with every request, e.g. OpenRouter's HTTP-Referer. */
   headers?: Record<string, string>;
+  /** Signed-in account label (e.g. email) for subscription endpoints. */
+  subscriptionAccount?: string;
+  /** Detected subscription plan/tier label (e.g. Plus, Pro, Max). */
+  subscriptionPlan?: string;
+  /** Signed-in accounts for a subscription endpoint (supports multiple accounts per provider). */
+  subscriptionAccounts?: SubscriptionAccount[];
+  /** How requests pick among multiple signed-in accounts: auto load-balance or manual. */
+  accountMode?: SubscriptionRouting;
+  /** Account id selected when `accountMode === 'manual'`. */
+  activeAccountId?: string;
 }
 
 export interface StreamOptions {

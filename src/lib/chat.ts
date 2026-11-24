@@ -8,7 +8,8 @@ import { askToNotify, notifyReplyFinished } from './notifications';
 import { workspaceFor } from './projects';
 import { parsePartialJson } from './partialJson';
 import { firstLine } from './quotes';
-import { getAdapter, ProviderError, type AttachmentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
+import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
+import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
 import { apiKeys, uid } from './storage';
 import { availableTools, executeTool } from './tools';
@@ -439,6 +440,11 @@ async function runCompletion(id: string) {
   }
 
   const latest = useChats.getState().conversations[id];
+  if (isSubscriptionType(endpoint.type)) {
+    const usageStore = useSubscriptionUsage.getState();
+    const accountId = usageStore.lastUsedAccount[endpoint.id];
+    void usageStore.refresh(endpoint, { force: true, ...(accountId ? { accountId } : {}) });
+  }
   if (latest && !latest.titled && useSettings.getState().titleGeneration) void generateTitle(id, endpoint, apiKey, conversation.model);
   // A reply where the model managed memory itself needs no second pass, nor does a stopped one.
   const managed = reply()?.content.some((p) => p.type === 'tool' && p.name.startsWith('memory_'));

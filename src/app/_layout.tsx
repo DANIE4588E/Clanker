@@ -71,6 +71,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/index" options={{ title: 'Settings' }} />
               <Stack.Screen name="settings/backend" options={{ presentation: 'modal', title: 'Backend' }} />
               <Stack.Screen name="settings/endpoint" options={{ presentation: 'modal', title: 'Endpoint' }} />
+              <Stack.Screen name="settings/subscription" options={{ presentation: 'modal', title: 'Subscription' }} />
               <Stack.Screen name="pair" options={{ headerShown: false, animation: 'none' }} />
               <Stack.Screen name="settings/workspace" options={{ title: 'Workspace files' }} />
               <Stack.Screen name="settings/tools" options={{ title: 'Files & code' }} />

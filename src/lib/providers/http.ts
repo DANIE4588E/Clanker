@@ -5,9 +5,23 @@ export function joinUrl(base: string, path: string) {
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, readonly status?: number) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly retryAfterMs?: number
+  ) {
     super(message);
   }
+}
+
+function parseRetryAfter(res: Response): number | undefined {
+  const raw = res.headers?.get?.('retry-after');
+  if (!raw) return undefined;
+  const sec = Number(raw);
+  if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1000, 60 * 60 * 1000);
+  const ts = Date.parse(raw);
+  if (Number.isFinite(ts) && ts > Date.now()) return Math.min(ts - Date.now(), 60 * 60 * 1000);
+  return undefined;
 }
 
 async function errorFrom(res: Response): Promise<ProviderError> {
@@ -18,7 +32,11 @@ async function errorFrom(res: Response): Promise<ProviderError> {
     const err = Array.isArray(json) ? json[0]?.error : json.error;
     message = (typeof err === 'string' ? err : err?.message) ?? json.message ?? body;
   } catch {}
-  return new ProviderError(`${res.status} ${res.statusText || 'Error'}${message ? `: ${message}` : ''}`, res.status);
+  return new ProviderError(
+    `${res.status} ${res.statusText || 'Error'}${message ? `: ${message}` : ''}`,
+    res.status,
+    parseRetryAfter(res)
+  );
 }
 
 export async function request(

@@ -24,7 +24,7 @@ export const CHARS_PER_TOKEN = 4;
 const IMAGE_TOKENS = 1500;
 
 // Providers that take binary non-image attachments inline (PDFs and the like).
-const BINARY_FILE_PROVIDERS: ProviderType[] = ['anthropic', 'gemini'];
+const BINARY_FILE_PROVIDERS: ProviderType[] = ['anthropic', 'gemini', 'claude'];
 
 export const tokensOf = (s: string) => Math.ceil(s.length / CHARS_PER_TOKEN);
 

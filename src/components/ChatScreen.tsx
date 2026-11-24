@@ -14,13 +14,16 @@ import { MessageList } from '@/components/MessageList';
 import { ModelPicker } from '@/components/ModelPicker';
 import { regenerate, stopStreaming, submitMessage } from '@/lib/chat';
 import { brandOfBackendKind, brandOfModel, friendlyModelName } from '@/lib/modelNames';
-import type { AttachmentPart } from '@/lib/providers';
+import { isSubscriptionType, type AttachmentPart } from '@/lib/providers';
 import { withQuotes } from '@/lib/quotes';
+import { primaryDisplayAccount } from '@/lib/subscriptions/router';
+import { headlineWindow } from '@/lib/subscriptions/usage';
 import { useTheme } from '@/lib/theme';
 import { useContextUsage } from '@/lib/usage';
 import { useChats } from '@/store/chats';
 import { useProjects } from '@/store/projects';
 import { useSettings } from '@/store/settings';
+import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { useUI } from '@/store/ui';
 import { useBackends } from '@/store/backends';
 import { refreshRemoteBackend, resumeRemoteChat } from '@/lib/remote/chat';
@@ -67,9 +70,16 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     })
   );
   const active = useSettings((s) => s.active);
+  const activeEndpoint = useSettings((s) => s.endpoints.find((e) => e.id === s.active?.endpointId));
   const selectedBackend = useBackends((s) => s.selected);
   const backendId = conversation?.backendId ?? selectedBackend;
   const remote = backendId !== 'local';
+  const activeSubEndpoint = !remote && activeEndpoint && isSubscriptionType(activeEndpoint.type) ? activeEndpoint : undefined;
+  const byAccount = useSubscriptionUsage((s) => s.byAccount);
+  const activeSubUsage = activeSubEndpoint
+    ? primaryDisplayAccount(activeSubEndpoint, byAccount, active?.model).usage
+    : undefined;
+  const usageLeftPercent = headlineWindow(activeSubUsage, active?.model)?.remainingPercent;
   const backendName = useBackends((s) => s.remotes.find((b) => b.id === backendId)?.name ?? (backendId === 'local' ? 'Clanker' : 'Remote backend'));
   const remoteModel = useBackends((s) => s.remotes.find((b) => b.id === backendId)?.model);
   const hasEndpoint = useSettings((s) => s.endpoints.some((e) => e.models.length > 0));
@@ -103,6 +113,11 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     Math.max(composerBase + composerGrowth(composerProgress.value) - COMPOSER_FADE, 0)
   );
   const emptyInsetStyle = useAnimatedStyle(() => ({ paddingBottom: bottomInset.value }));
+
+  useEffect(() => {
+    if (!activeSubEndpoint) return;
+    void useSubscriptionUsage.getState().refresh(activeSubEndpoint);
+  }, [activeSubEndpoint]);
 
   const streaming = !!conversation?.streaming || !!conversation?.pendingRemote;
   useEffect(() => {
@@ -182,6 +197,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
                 onAddEndpoint={() =>
                   router.push(remote ? { pathname: '/settings/backend', params: { id: backendId } } : '/settings/endpoint')
                 }
+                onAddSubscription={!remote ? () => router.push('/settings/subscription') : undefined}
               />
             </Animated.View>
           )}
@@ -215,6 +231,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
           onTitle={() => setPickerOpen(true)}
           backend={remote ? backendName : undefined}
           brand={titleBrand}
+          usageLeftPercent={usageLeftPercent}
           onNewChat={
             currentId
               ? () => (conversation?.projectId ? useUI.getState().openNewInProject(conversation.projectId) : open(null))

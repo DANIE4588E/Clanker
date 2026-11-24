@@ -43,14 +43,14 @@ function thinkingBody(endpoint: Endpoint, model: string, effort?: string) {
   };
 }
 
-type AnthropicModel = {
+export type AnthropicModel = {
   id: string;
   max_input_tokens?: number;
   capabilities?: { effort?: { supported?: boolean } & Record<string, { supported?: boolean } | boolean | undefined> };
 };
 
 /** Reads the levels marked supported in the model's capability tree, e.g. `effort.max.supported`. */
-function effortsOf(model: AnthropicModel) {
+export function effortsOfAnthropicModel(model: AnthropicModel) {
   const effort = model.capabilities?.effort;
   if (!effort?.supported) return undefined;
   const levels = Object.keys(effort).filter((k) => {
@@ -69,103 +69,138 @@ function headers(endpoint: Endpoint, apiKey?: string) {
   };
 }
 
+export function buildAnthropicBody({
+  endpoint,
+  model,
+  messages,
+  system,
+  systemPrefix,
+  effort,
+  tools,
+}: {
+  endpoint: Endpoint;
+  model: string;
+  messages: WireMessage[];
+  system?: string;
+  systemPrefix?: string;
+  effort?: string;
+  tools?: { name: string; description: string; parameters: Record<string, unknown> }[];
+}) {
+  // Anthropic only caches up to explicit breakpoints. History is append-only, so mark the end of
+  // this request and the end of the previous one (the user turn before), so each request reads
+  // what the last one wrote; the system prompt gets one too, shared by every chat.
+  const wire = messages.map(toAnthropic);
+  for (const m of wire.filter((m) => m.role === 'user').slice(-2)) {
+    const last = m.content.length - 1;
+    if (last >= 0) m.content[last] = { ...m.content[last], cache_control: CACHE };
+  }
+  const systemBlocks: Record<string, unknown>[] = [];
+  if (systemPrefix) systemBlocks.push({ type: 'text', text: systemPrefix, cache_control: CACHE });
+  if (system) systemBlocks.push({ type: 'text', text: system, cache_control: CACHE });
+
+  return {
+    model,
+    stream: true,
+    // Without thinking, 8192 is the cap; thinking counts toward max_tokens, and every
+    // model that takes effort allows at least 32K.
+    max_tokens: 8192,
+    ...(systemBlocks.length ? { system: systemBlocks } : {}),
+    ...(effort ? { output_config: { effort }, ...thinkingBody(endpoint, model, effort) } : {}),
+    ...(tools?.length
+      ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
+      : {}),
+    messages: wire,
+  };
+}
+
+export async function consumeAnthropicStream(
+  res: { body: ReadableStream<Uint8Array> | null },
+  callbacks: {
+    onToken: (text: string) => void;
+    onReasoning?: (text: string) => void;
+    onToolDraft?: (draft: { index: number; id: string; name: string; args: string }) => void;
+  }
+) {
+  const { onToken, onReasoning, onToolDraft } = callbacks;
+  // Tool-use and thinking blocks by stream index, assembled from their deltas.
+  const blocks: Record<number, Record<string, any>> = {};
+  const toolCalls: ToolCall[] = [];
+  const thinking: unknown[] = [];
+  const usage: StreamUsage = {};
+  for await (const data of readSSE(res)) {
+    const event = JSON.parse(data);
+    if (event.type === 'error') throw new Error(event.error?.message ?? 'Stream error');
+    // Prompt counts come at the start; the output count grows in message_delta to its total.
+    if (event.type === 'message_start' && event.message?.usage) {
+      const u = event.message.usage;
+      usage.cached = u.cache_read_input_tokens ?? 0;
+      usage.input = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + usage.cached;
+    }
+    if (event.type === 'message_delta' && typeof event.usage?.output_tokens === 'number') usage.output = event.usage.output_tokens;
+    if (event.type === 'content_block_start') {
+      const block = event.content_block;
+      if (block?.type === 'tool_use') {
+        blocks[event.index] = { type: 'tool_use', id: block.id, name: block.name, json: '' };
+        onToolDraft?.({ index: event.index, id: block.id, name: block.name, args: '' });
+      }
+      if (block?.type === 'thinking') blocks[event.index] = { type: 'thinking', thinking: block.thinking ?? '', signature: '' };
+      // Redacted thinking is opaque, but has to be replayed like the rest.
+      if (block?.type === 'redacted_thinking') thinking.push(block);
+    }
+    if (event.type === 'content_block_delta') {
+      const block = blocks[event.index];
+      const delta = event.delta;
+      if (delta?.type === 'text_delta') onToken(delta.text);
+      if (delta?.type === 'input_json_delta' && block) {
+        block.json += delta.partial_json ?? '';
+        onToolDraft?.({ index: event.index, id: block.id, name: block.name, args: block.json });
+      }
+      if (delta?.type === 'signature_delta' && block) block.signature += delta.signature ?? '';
+      // Summarized thinking streams as summary_delta instead of thinking_delta.
+      const thought = delta?.type === 'thinking_delta' ? delta.thinking : delta?.type === 'summary_delta' ? (delta.summary ?? delta.text) : '';
+      if (thought) {
+        onReasoning?.(thought);
+        if (block?.type === 'thinking') block.thinking += thought;
+      }
+    }
+    if (event.type === 'content_block_stop') {
+      const block = blocks[event.index];
+      if (block?.type === 'tool_use') {
+        let input: Record<string, unknown> = {};
+        try {
+          input = block.json ? JSON.parse(block.json) : {};
+        } catch {
+          input = { _raw: block.json };
+        }
+        toolCalls.push({ id: block.id, name: block.name, input });
+      }
+      if (block?.type === 'thinking') thinking.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
+    }
+    if (event.type === 'message_stop') break;
+  }
+  return { toolCalls, thinking: thinking.length ? thinking : undefined, usage };
+}
+
 export const anthropic: ProviderAdapter = {
   async listModels(endpoint, apiKey) {
     const json = await getJson(joinUrl(endpoint.baseUrl, 'v1/models?limit=1000'), headers(endpoint, apiKey));
     return {
       models: ((json.data ?? []) as AnthropicModel[]).map((m) => ({
         id: m.id,
-        efforts: effortsOf(m),
+        efforts: effortsOfAnthropicModel(m),
         contextLength: m.max_input_tokens,
       })),
     };
   },
 
   async stream({ endpoint, apiKey, model, messages, system, effort, tools, signal, onToken, onReasoning, onToolDraft }) {
-    // Anthropic only caches up to explicit breakpoints. History is append-only, so mark the end of
-    // this request and the end of the previous one (the user turn before), so each request reads
-    // what the last one wrote; the system prompt gets one too, shared by every chat.
-    const wire = messages.map(toAnthropic);
-    for (const m of wire.filter((m) => m.role === 'user').slice(-2)) {
-      const last = m.content.length - 1;
-      if (last >= 0) m.content[last] = { ...m.content[last], cache_control: CACHE };
-    }
-    const body = {
-      model,
-      stream: true,
-      // Without thinking, 8192 is the cap; thinking counts toward max_tokens, and every
-      // model that takes effort allows at least 32K.
-      max_tokens: 8192,
-      ...(system ? { system: [{ type: 'text', text: system, cache_control: CACHE }] } : {}),
-      ...(effort ? { output_config: { effort }, ...thinkingBody(endpoint, model, effort) } : {}),
-      ...(tools?.length
-        ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
-        : {}),
-      messages: wire,
-    };
+    const body = buildAnthropicBody({ endpoint, model, messages, system, effort, tools });
     const res = await request(joinUrl(endpoint.baseUrl, 'v1/messages'), {
       headers: { Accept: 'text/event-stream', ...headers(endpoint, apiKey) },
       body,
       signal,
     });
-
-    // Tool-use and thinking blocks by stream index, assembled from their deltas.
-    const blocks: Record<number, Record<string, any>> = {};
-    const toolCalls: ToolCall[] = [];
-    const thinking: unknown[] = [];
-    const usage: StreamUsage = {};
-    for await (const data of readSSE(res)) {
-      const event = JSON.parse(data);
-      if (event.type === 'error') throw new Error(event.error?.message ?? 'Stream error');
-      // Prompt counts come at the start; the output count grows in message_delta to its total.
-      if (event.type === 'message_start' && event.message?.usage) {
-        const u = event.message.usage;
-        usage.cached = u.cache_read_input_tokens ?? 0;
-        usage.input = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + usage.cached;
-      }
-      if (event.type === 'message_delta' && typeof event.usage?.output_tokens === 'number') usage.output = event.usage.output_tokens;
-      if (event.type === 'content_block_start') {
-        const block = event.content_block;
-        if (block?.type === 'tool_use') {
-          blocks[event.index] = { type: 'tool_use', id: block.id, name: block.name, json: '' };
-          onToolDraft?.({ index: event.index, id: block.id, name: block.name, args: '' });
-        }
-        if (block?.type === 'thinking') blocks[event.index] = { type: 'thinking', thinking: block.thinking ?? '', signature: '' };
-        // Redacted thinking is opaque, but has to be replayed like the rest.
-        if (block?.type === 'redacted_thinking') thinking.push(block);
-      }
-      if (event.type === 'content_block_delta') {
-        const block = blocks[event.index];
-        const delta = event.delta;
-        if (delta?.type === 'text_delta') onToken(delta.text);
-        if (delta?.type === 'input_json_delta' && block) {
-          block.json += delta.partial_json ?? '';
-          onToolDraft?.({ index: event.index, id: block.id, name: block.name, args: block.json });
-        }
-        if (delta?.type === 'signature_delta' && block) block.signature += delta.signature ?? '';
-        // Summarized thinking streams as summary_delta instead of thinking_delta.
-        const thought = delta?.type === 'thinking_delta' ? delta.thinking : delta?.type === 'summary_delta' ? (delta.summary ?? delta.text) : '';
-        if (thought) {
-          onReasoning?.(thought);
-          if (block?.type === 'thinking') block.thinking += thought;
-        }
-      }
-      if (event.type === 'content_block_stop') {
-        const block = blocks[event.index];
-        if (block?.type === 'tool_use') {
-          let input: Record<string, unknown> = {};
-          try {
-            input = block.json ? JSON.parse(block.json) : {};
-          } catch {
-            input = { _raw: block.json };
-          }
-          toolCalls.push({ id: block.id, name: block.name, input });
-        }
-        if (block?.type === 'thinking') thinking.push({ type: 'thinking', thinking: block.thinking, signature: block.signature });
-      }
-      if (event.type === 'message_stop') break;
-    }
-    return { toolCalls, thinking: thinking.length ? thinking : undefined, usage };
+    return consumeAnthropicStream(res, { onToken, onReasoning, onToolDraft });
   },
 };
 

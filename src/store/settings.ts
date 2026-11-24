@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { defaultEffort, type Endpoint } from '@/lib/providers';
+import { defaultEffort, isSubscriptionType, type Endpoint } from '@/lib/providers';
 import { apiKeys, jsonFileStorage } from '@/lib/storage';
+import { subscriptionAuth } from '@/lib/subscriptions/credentials';
+import { useSubscriptionUsage } from './subscriptionUsage';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -21,7 +23,8 @@ export type SearchProvider = 'firecrawl' | 'duckduckgo' | 'exa' | 'brave' | 'tav
 export type SearchConfig = { provider: SearchProvider; /** SearXNG instance URL. */ url?: string };
 
 // Hosted APIs whose current models all have windows of 128K tokens or more, though not every one reports it.
-const LARGE_CONTEXT_HOSTS = /api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.deepseek\.com|api\.mistral\.ai|api\.x\.ai/i;
+const LARGE_CONTEXT_HOSTS =
+  /api\.openai\.com|chatgpt\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.deepseek\.com|api\.mistral\.ai|api\.x\.ai/i;
 
 const DEFAULT_BUDGET = 32_000;
 
@@ -120,7 +123,13 @@ export const useSettings = create<SettingsState>()(
         set({ endpoints, active });
       },
       removeEndpoint: (id) => {
+        const target = get().endpoints.find((e) => e.id === id);
         apiKeys.remove(id);
+        if (target && isSubscriptionType(target.type)) {
+          const ids = target.subscriptionAccounts?.map((a) => a.id) ?? [];
+          void subscriptionAuth.removeAll(id, ids);
+          useSubscriptionUsage.getState().removeEndpointUsage(id);
+        }
         const endpoints = get().endpoints.filter((e) => e.id !== id);
         let active = get().active;
         if (active?.endpointId === id) {
@@ -156,7 +165,7 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'settings',
       storage: jsonFileStorage,
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
         const state = persisted as SettingsState & { contextBudget?: number };
         // v0 had one budget for every model whose window wasn't known; keep it on those models.
@@ -173,6 +182,23 @@ export const useSettings = create<SettingsState>()(
         // v1 defaulted to compressing at 90% down to 60%; settings left at that move to the new defaults.
         if (version < 2 && state.compression?.trigger === 90 && state.compression.target === 60) {
           state.compression = COMPRESSION_DEFAULTS;
+        }
+        // v2 could contain removed Gemini subscription endpoints; drop them and clean up their tokens.
+        if (version < 3 && Array.isArray(state.endpoints)) {
+          const removed = state.endpoints.filter((e) => (e.type as string) === 'gemini-sub');
+          if (removed.length) {
+            for (const ep of removed) {
+              const ids = ep.subscriptionAccounts?.map((a) => a.id) ?? [];
+              void subscriptionAuth.removeAll(ep.id, ids);
+              useSubscriptionUsage.getState().removeEndpointUsage(ep.id);
+            }
+            const removedIds = new Set(removed.map((e) => e.id));
+            state.endpoints = state.endpoints.filter((e) => !removedIds.has(e.id));
+            if (state.active && removedIds.has(state.active.endpointId)) {
+              const next = state.endpoints.find((e) => e.models.length);
+              state.active = next ? { endpointId: next.id, model: next.models[0] } : null;
+            }
+          }
         }
         return state;
       },

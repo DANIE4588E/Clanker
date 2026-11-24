@@ -23,9 +23,13 @@ export function guessEfforts(type: ProviderType, model: string, effortParam?: Ef
     case 'gemini':
       if (/gemini-3[\w.-]*-pro/.test(id)) return ['low', 'high'];
       return /gemini-(2\.5|[3-9])/.test(id) ? LOW_MEDIUM_HIGH : undefined;
+    case 'codex':
+      if (/codex-mini/.test(id)) return LOW_MEDIUM_HIGH;
+      return /(gpt-[5-9]|codex|astra|sol|terra|luna|o\d)/.test(id) ? ['low', 'medium', 'high', 'xhigh'] : undefined;
     case 'ollama':
       return id.includes('gpt-oss') ? LOW_MEDIUM_HIGH : undefined;
     case 'anthropic':
+    case 'claude':
       // The Models API reports effort support, so there is nothing to guess.
       return undefined;
   }

@@ -2,6 +2,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandIcon, type BrandId } from './BrandIcon';
+import { usageToneColor } from './SubscriptionUsageCard';
 import { useTheme } from '@/lib/theme';
 
 type Props = {
@@ -20,9 +21,11 @@ type Props = {
   backend?: string;
   /** With friendly model names on, the mark shown before the title: the backend's or the model's provider. */
   brand?: BrandId;
+  /** Remaining subscription quota percentage for the active subscription model, shown as a compact pill badge. */
+  usageLeftPercent?: number;
 };
 
-export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOff, onToggleMemory, backend, brand }: Props) {
+export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOff, onToggleMemory, backend, brand, usageLeftPercent }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const circle = [styles.circle, { backgroundColor: colors.chrome, borderColor: colors.chromeBorder }];
@@ -60,7 +63,7 @@ export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOf
         <Pressable
           onPress={onTitle}
           disabled={!onTitle}
-          accessibilityLabel={`${backend ? `${title} on ${backend}` : title}${onTitle ? ', choose model' : ''}`}
+          accessibilityLabel={`${backend ? `${title} on ${backend}` : title}${typeof usageLeftPercent === 'number' ? `, ${usageLeftPercent}% usage left` : ''}${onTitle ? ', choose model' : ''}`}
           style={({ pressed }) => [
             styles.pill,
             { backgroundColor: colors.segmentThumb },
@@ -76,6 +79,12 @@ export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOf
           <Text numberOfLines={1} style={[styles.titleText, { color: colors.text }]}>
             {title}
           </Text>
+          {typeof usageLeftPercent === 'number' && (
+            <View style={[styles.usageBadge, { backgroundColor: colors.surface }]}>
+              <View style={[styles.usageDot, { backgroundColor: usageToneColor(usageLeftPercent, colors) }]} />
+              <Text style={[styles.usageBadgeText, { color: colors.textSecondary }]}>{usageLeftPercent}%</Text>
+            </View>
+          )}
         </Pressable>
       </View>
 
@@ -131,4 +140,15 @@ const styles = StyleSheet.create({
   // Shrinkable so that when the backend/memory icons make the pill too wide, the name truncates
   // with an ellipsis early instead of overflowing past the pill's padding to its edge.
   titleText: { fontSize: 16, fontWeight: '500', flexShrink: 1 },
+  usageBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    flexShrink: 0,
+  },
+  usageDot: { width: 6, height: 6, borderRadius: 3 },
+  usageBadgeText: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });

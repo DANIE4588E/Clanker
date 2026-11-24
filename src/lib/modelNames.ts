@@ -73,6 +73,8 @@ export function brandOfModel(model: string): BrandId | undefined {
 
 /** The brand a hosted endpoint belongs to, from its API host, name, and protocol. */
 export function brandOfEndpoint(endpoint: { baseUrl: string; name?: string; type: string }): BrandId | undefined {
+  if (endpoint.type === 'codex') return 'openai';
+  if (endpoint.type === 'claude') return 'anthropic';
   let host = endpoint.baseUrl;
   try {
     host = new URL(endpoint.baseUrl).hostname;
@@ -109,6 +111,7 @@ const CANONICAL: Record<string, string> = {
   gemini: 'Gemini',
   gemma: 'Gemma',
   gpt: 'GPT',
+  codex: 'Codex',
   llama: 'Llama',
   mistral: 'Mistral',
   mixtral: 'Mixtral',

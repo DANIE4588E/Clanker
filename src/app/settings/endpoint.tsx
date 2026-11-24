@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { LinearTransition } from 'react-native-reanimated';
 import { Chip, Disclosure, Input, Label } from '@/components/Form';
@@ -41,11 +41,13 @@ export default function EndpointScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const existing = useSettings((s) => s.endpoints.find((e) => e.id === id));
 
+  const [endpointId] = useState(() => existing?.id ?? uid());
   const [name, setName] = useState(existing?.name ?? '');
   const [type, setType] = useState<ProviderType>(existing?.type ?? 'openai');
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? '');
   const [altUrls, setAltUrls] = useState<string[]>(existing?.altBaseUrls ?? []);
   const [apiKey, setApiKey] = useState('');
+  const [keyLoaded, setKeyLoaded] = useState(!existing);
   const [showKey, setShowKey] = useState(false);
   const [models, setModels] = useState<string[]>(existing?.models ?? []);
   const [efforts, setEfforts] = useState<Record<string, string[]>>(existing?.efforts ?? {});
@@ -62,15 +64,29 @@ export default function EndpointScreen() {
   );
   const [busy, setBusy] = useState<'fetch' | 'test' | null>(null);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [savedOnce, setSavedOnce] = useState(!!existing);
+
+  const deletedRef = useRef(false);
+  const persistRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    if (existing) apiKeys.get(existing.id).then((k) => k && setApiKey(k));
+    let active = true;
+    if (existing) {
+      apiKeys.get(existing.id).then((k) => {
+        if (!active) return;
+        if (k) setApiKey(k);
+        setKeyLoaded(true);
+      });
+    }
+    return () => {
+      active = false;
+    };
   }, [existing]);
 
-  const alts = altUrls.map((u) => u.trim()).filter(Boolean);
+  const alts = useMemo(() => altUrls.map((u) => u.trim()).filter(Boolean), [altUrls]);
 
   const draft = (): Endpoint => ({
-    id: existing?.id ?? uid(),
+    id: endpointId,
     name: name.trim() || PROVIDER_LABELS[type],
     type,
     baseUrl: baseUrl.trim(),
@@ -82,6 +98,37 @@ export default function EndpointScreen() {
     ...(type === 'openai' ? { effortParam } : {}),
     headers: parseHeaders(headersText),
   });
+
+  const canSave = !!baseUrl.trim() && models.length > 0;
+
+  // Auto-save whenever a valid endpoint configuration changes, and flush on unmount.
+  useEffect(() => {
+    const persist = () => {
+      if (deletedRef.current || !baseUrl.trim() || !models.length) return;
+      const ep: Endpoint = {
+        id: endpointId,
+        name: name.trim() || PROVIDER_LABELS[type],
+        type,
+        baseUrl: baseUrl.trim(),
+        ...(alts.length ? { altBaseUrls: alts } : {}),
+        models,
+        efforts: Object.fromEntries(models.flatMap((m) => (efforts[m]?.length ? [[m, efforts[m]]] : []))),
+        contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
+        budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
+        ...(type === 'openai' ? { effortParam } : {}),
+        headers: parseHeaders(headersText),
+      };
+      useSettings.getState().upsertEndpoint(ep);
+      if (keyLoaded) void apiKeys.set(ep.id, apiKey.trim());
+      setSavedOnce(true);
+    };
+    persistRef.current = persist;
+    if (!canSave) return;
+    const timer = setTimeout(persist, 250);
+    return () => clearTimeout(timer);
+  }, [endpointId, name, type, baseUrl, alts, apiKey, keyLoaded, models, efforts, contexts, budgets, effortParam, headersText, canSave]);
+
+  useEffect(() => () => persistRef.current(), []);
 
   const applyPreset = (preset: (typeof PRESETS)[number]) => {
     setType(preset.type);
@@ -187,23 +234,15 @@ export default function EndpointScreen() {
     else Alert.alert('Invalid context budget', 'Enter a token count such as 32000, 128K or 1M.');
   };
 
-  const save = async () => {
-    if (!baseUrl.trim()) return Alert.alert('Missing base URL', 'Enter the URL of the API.');
-    if (!models.length) return Alert.alert('No models', 'Fetch the model list or add a model name manually.');
-    const endpoint = draft();
-    await apiKeys.set(endpoint.id, apiKey.trim());
-    useSettings.getState().upsertEndpoint(endpoint);
-    router.back();
-  };
-
   const remove = () =>
-    Alert.alert('Delete endpoint?', `${existing?.name} and its API key will be removed from this device.`, [
+    Alert.alert('Delete endpoint?', `${name.trim() || PROVIDER_LABELS[type]} and its API key will be removed from this device.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          useSettings.getState().removeEndpoint(existing!.id);
+          deletedRef.current = true;
+          useSettings.getState().removeEndpoint(endpointId);
           router.back();
         },
       },
@@ -220,12 +259,13 @@ export default function EndpointScreen() {
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: colors.background }}>
       <Stack.Screen
         options={{
-          title: existing ? 'Edit endpoint' : 'Add endpoint',
-          headerRight: () => (
-            <Pressable onPress={save} hitSlop={10}>
-              <Text style={{ color: colors.link, fontSize: 17, fontWeight: '600' }}>Save</Text>
-            </Pressable>
-          ),
+          title: savedOnce ? 'Edit endpoint' : 'Add endpoint',
+          headerRight: () =>
+            canSave ? (
+              <Text style={{ color: colors.textTertiary, fontSize: 14 }}>Saved</Text>
+            ) : (
+              <Text style={{ color: colors.textTertiary, fontSize: 13 }}>Add a model to save</Text>
+            ),
         }}
       />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -479,7 +519,7 @@ export default function EndpointScreen() {
             </View>
           )}
 
-          {existing && (
+          {savedOnce && (
             <Pressable onPress={remove} style={({ pressed }) => [styles.button, styles.delete, pressed && { opacity: 0.6 }]}>
               <Feather name="trash-2" size={16} color={colors.danger} />
               <Text style={{ color: colors.danger, fontSize: 16, fontWeight: '500' }}>Delete endpoint</Text>

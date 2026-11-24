@@ -14,13 +14,14 @@ type Props = {
   hasEndpoint: boolean;
   onSuggestion: (text: string) => void;
   onAddEndpoint: () => void;
+  onAddSubscription?: () => void;
   /** The chat about to be started is a temporary one, without memory. */
   memoryOff?: boolean;
   /** The name of the project the chat about to be started goes in. */
   project?: string;
 };
 
-export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, memoryOff, project, remote, remoteBrand }: Props) {
+export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, onAddSubscription, memoryOff, project, remote, remoteBrand }: Props) {
   const { colors } = useTheme();
   const { suggestions, loading, error } = useSuggestions(project, memoryOff);
 
@@ -30,9 +31,26 @@ export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, memoryOff
         <Text style={[styles.heading, { color: colors.text }]}>
           {remote ? `${remote} has no model yet` : 'Connect a model to start'}
         </Text>
-        <Pressable onPress={onAddEndpoint} style={[styles.cta, { backgroundColor: colors.sendBg }]}>
-          <Text style={[styles.ctaText, { color: colors.sendFg }]}>{remote ? 'Check the backend' : 'Add an endpoint'}</Text>
-        </Pressable>
+        <View style={styles.ctaGroup}>
+          {onAddSubscription && !remote && (
+            <Pressable onPress={onAddSubscription} style={[styles.cta, { backgroundColor: colors.sendBg }]}>
+              <Text style={[styles.ctaText, { color: colors.sendFg }]}>Connect a subscription</Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={onAddEndpoint}
+            style={[
+              styles.cta,
+              onAddSubscription && !remote
+                ? { borderWidth: 1, borderColor: colors.border }
+                : { backgroundColor: colors.sendBg },
+            ]}
+          >
+            <Text style={[styles.ctaText, { color: onAddSubscription && !remote ? colors.text : colors.sendFg }]}>
+              {remote ? 'Check the backend' : 'Add an API endpoint'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -102,6 +120,7 @@ export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, memoryOff
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'flex-end', paddingHorizontal: 26, paddingBottom: 14 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, gap: 20 },
+  ctaGroup: { alignItems: 'center', gap: 10 },
   heading: { fontSize: 24, fontWeight: '600', textAlign: 'center' },
   cta: { borderRadius: 999, paddingHorizontal: 22, paddingVertical: 12 },
   ctaText: { fontSize: 15, fontWeight: '600' },

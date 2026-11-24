@@ -1,11 +1,14 @@
 import Constants from 'expo-constants';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Row, Section, ToggleRow } from '@/components/Form';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { UpdateRow } from '@/components/Updates';
-import { PROVIDER_LABELS } from '@/lib/providers';
+import { isSubscriptionType, PROVIDER_LABELS } from '@/lib/providers';
 import { brandOfBackendKind, brandOfEndpoint, friendlyModelName } from '@/lib/modelNames';
+import { accountsOf, primaryDisplayAccount } from '@/lib/subscriptions/router';
+import { compactUsageSummary } from '@/lib/subscriptions/usage';
 import { entryAvailable } from '@/lib/tools';
 import { entryOn, LOCAL_TOOL_GROUPS, WEB_TOOLS } from '@/lib/tools/catalog';
 import { useTheme } from '@/lib/theme';
@@ -14,6 +17,7 @@ import { updatesSupported } from '@/lib/updates';
 import { useBackends } from '@/store/backends';
 import { useMemory } from '@/store/memory';
 import { useSettings, type FollowUpMode, type ThemePreference } from '@/store/settings';
+import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { useUpdates } from '@/store/updates';
 
 const THEMES: { value: ThemePreference; label: string; icon: 'smartphone' | 'sun' | 'moon' }[] = [
@@ -43,7 +47,17 @@ function webDetail(provider: string, disabled: string[]) {
 export default function SettingsScreen() {
   const { colors } = useTheme();
   const endpoints = useSettings((s) => s.endpoints);
+  const subscriptions = endpoints.filter((e) => isSubscriptionType(e.type));
+  const apiEndpoints = endpoints.filter((e) => !isSubscriptionType(e.type));
+  const byAccount = useSubscriptionUsage((s) => s.byAccount);
   const remotes = useBackends((s) => s.remotes);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subs = useSettings.getState().endpoints.filter((e) => isSubscriptionType(e.type));
+      for (const sub of subs) void useSubscriptionUsage.getState().refresh(sub);
+    }, [])
+  );
   const theme = useSettings((s) => s.theme);
   const setTheme = useSettings((s) => s.setTheme);
   const tools = useSettings((s) => s.tools);
@@ -81,8 +95,41 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={styles.content}>
-      <Section title="Models" footer="Connect any OpenAI-compatible, Anthropic, Ollama or Gemini API. Keys stay in the device keychain.">
-        {endpoints.map((e) => (
+      <Section
+        title="Subscriptions"
+        footer="Connect a Codex or Claude subscription without an API key. Tokens stay in the device keychain."
+      >
+        {subscriptions.map((e) => {
+          const accounts = accountsOf(e);
+          const { account, usage: u } = primaryDisplayAccount(e, byAccount);
+          const summary = compactUsageSummary(u);
+          const plan = u?.plan ?? account?.plan ?? e.subscriptionPlan;
+          const multiPrefix =
+            accounts.length > 1
+              ? e.accountMode === 'manual'
+                ? `${account?.label ?? 'Manual'} (${accounts.length})`
+                : `Auto · ${accounts.length} accounts`
+              : plan ?? e.subscriptionAccount;
+          const detail = summary
+            ? [multiPrefix, summary].filter(Boolean).join(' · ')
+            : [multiPrefix, `${e.models.length} model${e.models.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+          return (
+            <Row
+              key={e.id}
+              icon="user-check"
+              brand={friendly ? brandOfEndpoint(e) : undefined}
+              title={e.name}
+              detail={detail}
+              value={summary ? `${e.models.length}m` : undefined}
+              onPress={() => router.push({ pathname: '/settings/subscription', params: { id: e.id } })}
+            />
+          );
+        })}
+        <Row icon="plus" title="Add subscription" tint="link" onPress={() => router.push('/settings/subscription')} />
+      </Section>
+
+      <Section title="API endpoints" footer="Connect any OpenAI-compatible, Anthropic, Ollama or Gemini API. Keys stay in the device keychain.">
+        {apiEndpoints.map((e) => (
           <Row
             key={e.id}
             icon="cloud"

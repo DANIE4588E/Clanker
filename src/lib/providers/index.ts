@@ -1,4 +1,6 @@
 import { anthropic } from './anthropic';
+import { claudeSub } from './claudeSub';
+import { codex } from './codex';
 import { gemini } from './gemini';
 import { ollama } from './ollama';
 import { ProviderError } from './http';
@@ -64,6 +66,8 @@ const adapters: Record<ProviderType, ProviderAdapter> = {
   anthropic: withFailover(anthropic),
   ollama: withFailover(ollama),
   gemini: withFailover(gemini),
+  codex: withFailover(codex),
+  claude: withFailover(claudeSub),
 };
 
 export function getAdapter(type: ProviderType) {
@@ -75,6 +79,8 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   anthropic: 'Anthropic',
   ollama: 'Ollama',
   gemini: 'Google Gemini',
+  codex: 'Codex subscription',
+  claude: 'Claude subscription',
 };
 
 export type Preset = {

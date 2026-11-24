@@ -7,14 +7,18 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from '
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 import { useShallow } from 'zustand/react/shallow';
-import { PROVIDER_LABELS } from '@/lib/providers';
+import { isSubscriptionType, PROVIDER_LABELS, type Endpoint } from '@/lib/providers';
 import { BrandIcon, type BrandId } from './BrandIcon';
+import { SubscriptionUsageStrip, usageToneColor } from './SubscriptionUsageCard';
 import { brandOfBackendKind, brandOfEndpoint, brandOfModel, friendlyModelName } from '@/lib/modelNames';
+import { accountsOf, accountUsageKey, primaryDisplayAccount } from '@/lib/subscriptions/router';
+import { headlineWindow } from '@/lib/subscriptions/usage';
 import { useTheme } from '@/lib/theme';
 import { groupByProvider, groupLabel, isModelHidden, modelGroup, modelInGroup, modelProvider } from '@/lib/remote/types';
 import { useBackends } from '@/store/backends';
 import { useChats } from '@/store/chats';
 import { useSettings } from '@/store/settings';
+import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { RemoteFiles } from './RemoteReply';
 
 type Props = {
@@ -45,6 +49,8 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
   const endpoints = useSettings((s) => s.endpoints);
   const active = useSettings((s) => s.active);
   const friendly = useSettings((s) => s.friendlyModelNames);
+  const byAccount = useSubscriptionUsage((s) => s.byAccount);
+  const usageLoading = useSubscriptionUsage((s) => s.loading);
   const remotes = useBackends((s) => s.remotes);
   const selectedBackend = useBackends((s) => s.selected);
   const conversation = useChats(
@@ -66,6 +72,13 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
     setQuery('');
     setExpanded(false);
   }
+
+  useEffect(() => {
+    if (!visible) return;
+    for (const e of useSettings.getState().endpoints) {
+      if (isSubscriptionType(e.type)) void useSubscriptionUsage.getState().refresh(e);
+    }
+  }, [visible]);
 
   // The sheet is always full height and only ever moves: resizing it relaid it out every frame.
   // `extent` is how much of it shows. It rests at `mid` or `full`, and dragging below `mid`
@@ -184,6 +197,7 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
           // Friendly mode: the backend's mark carries the kind, so the text drops it.
           title: grouped ? groupLabel(g.provider) : friendly ? backend.name : `${backend.name} · ${BACKEND_LABELS[backend.kind]}`,
           brand: friendly ? (grouped ? brandOfModel(g.provider) : brandOfBackendKind(backend.kind)) : undefined,
+          subscriptionEndpoint: undefined as Endpoint | undefined,
           data: g.models
             .filter((m) => !q || m.toLowerCase().includes(q) || friendlyModelName(m).toLowerCase().includes(q))
             .map(
@@ -207,6 +221,7 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
         key: e.id,
         title: friendly ? e.name : `${e.name} · ${PROVIDER_LABELS[e.type]}`,
         brand: friendly ? brandOfEndpoint(e) : undefined,
+        subscriptionEndpoint: isSubscriptionType(e.type) ? e : undefined,
         data: e.models
           .filter((m) => !q || m.toLowerCase().includes(q) || e.name.toLowerCase().includes(q) || (friendly && friendlyModelName(m).toLowerCase().includes(q)))
           .map(
@@ -347,14 +362,96 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
                 stickySectionHeadersEnabled={false}
                 style={styles.list}
                 contentContainerStyle={{ paddingBottom: hiddenBottom }}
-                renderSectionHeader={({ section }) => (
-                  <View style={styles.sectionRow}>
-                    {section.brand && <BrandIcon brand={section.brand} size={14} />}
-                    <Text style={[styles.section, { color: colors.textTertiary }]}>
-                      {section.title}
-                    </Text>
-                  </View>
-                )}
+                renderSectionHeader={({ section }) => {
+                  const sub = section.subscriptionEndpoint;
+                  const subAccounts = sub ? accountsOf(sub) : [];
+                  const primary = sub ? primaryDisplayAccount(sub, byAccount) : undefined;
+                  const subUsage = primary?.usage;
+                  const subLoading = sub
+                    ? subAccounts.some((a) => !!usageLoading[accountUsageKey(sub.id, a.id)])
+                    : false;
+                  const isManual = sub?.accountMode === 'manual';
+                  const activeAccId = sub?.activeAccountId ?? subAccounts[0]?.id;
+
+                  return (
+                    <View>
+                      <View style={styles.sectionRow}>
+                        {section.brand && <BrandIcon brand={section.brand} size={14} />}
+                        <Text style={[styles.section, { color: colors.textTertiary }]}>
+                          {section.title}
+                          {sub && (subUsage?.plan ?? sub.subscriptionPlan) ? ` · ${subUsage?.plan ?? sub.subscriptionPlan}` : ''}
+                        </Text>
+                      </View>
+                      {sub && subAccounts.length > 1 && (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.accountChips}
+                          style={styles.accountChipsRow}
+                        >
+                          <Pressable
+                            onPress={() =>
+                              useSettings.getState().upsertEndpoint({ ...sub, accountMode: 'auto' })
+                            }
+                            style={[
+                              styles.accountChip,
+                              {
+                                borderColor: !isManual ? colors.text : colors.border,
+                                backgroundColor: !isManual ? colors.surface : 'transparent',
+                              },
+                            ]}
+                          >
+                            <Feather name="shuffle" size={11} color={!isManual ? colors.text : colors.textSecondary} />
+                            <Text style={[styles.accountChipText, { color: !isManual ? colors.text : colors.textSecondary }]}>
+                              Auto
+                            </Text>
+                          </Pressable>
+                          {subAccounts.map((acc) => {
+                            const accUsage = byAccount[accountUsageKey(sub.id, acc.id)];
+                            const pct = headlineWindow(accUsage)?.remainingPercent;
+                            const selected = isManual && activeAccId === acc.id;
+                            const shortName = (acc.email ?? acc.label).split('@')[0];
+                            return (
+                              <Pressable
+                                key={acc.id}
+                                onPress={() =>
+                                  useSettings
+                                    .getState()
+                                    .upsertEndpoint({ ...sub, accountMode: 'manual', activeAccountId: acc.id })
+                                }
+                                style={[
+                                  styles.accountChip,
+                                  {
+                                    borderColor: selected ? colors.text : colors.border,
+                                    backgroundColor: selected ? colors.surface : 'transparent',
+                                  },
+                                ]}
+                              >
+                                {typeof pct === 'number' && (
+                                  <View style={[styles.accountDot, { backgroundColor: usageToneColor(pct, colors) }]} />
+                                )}
+                                <Text
+                                  numberOfLines={1}
+                                  style={[styles.accountChipText, { color: selected ? colors.text : colors.textSecondary }]}
+                                >
+                                  {shortName}
+                                  {typeof pct === 'number' ? ` ${pct}%` : ''}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </ScrollView>
+                      )}
+                      {sub && (
+                        <SubscriptionUsageStrip
+                          usage={subUsage}
+                          loading={subLoading}
+                          onRefresh={() => void useSubscriptionUsage.getState().refresh(sub, { force: true })}
+                        />
+                      )}
+                    </View>
+                  );
+                }}
                 renderItem={({ item }) => (
                   <Pressable
                     onPress={() => {
@@ -384,7 +481,7 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
                       ? 'No models match.'
                       : remote
                         ? 'This backend has no models. Check its model provider on the host, then refresh it in Settings.'
-                        : 'No endpoints yet. Add one to start chatting.'}
+                        : 'No subscriptions or endpoints yet. Add one to start chatting.'}
                   </Text>
                 }
                 ListFooterComponent={
@@ -424,7 +521,7 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
             style={({ pressed }) => [styles.manage, pressed && { opacity: 0.6 }]}
           >
             <Feather name="settings" size={18} color={colors.text} />
-            <Text style={[styles.model, { color: colors.text }]}>{remote ? 'Manage backend' : 'Manage endpoints'}</Text>
+            <Text style={[styles.model, { color: colors.text }]}>{remote ? 'Manage backend' : 'Manage models'}</Text>
           </Pressable>
         </Animated.View>
       </GestureHandlerRootView>
@@ -475,6 +572,20 @@ const styles = StyleSheet.create({
   // Vertical padding lives on the row, not the label: uneven padding on the text would center the
   // brand mark against the padded box and lift it above the label.
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 },
+  accountChipsRow: { flexGrow: 0, flexShrink: 0, marginTop: 2, marginBottom: 2 },
+  accountChips: { gap: 6, paddingHorizontal: 20 },
+  accountChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    maxWidth: 160,
+  },
+  accountChipText: { fontSize: 12, fontWeight: '500', flexShrink: 1 },
+  accountDot: { width: 6, height: 6, borderRadius: 3 },
   modelWithBrand: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, minWidth: 0 },
   section: { fontSize: 13, fontWeight: '500' },
   // Standalone section labels carry the row's inset themselves.
