@@ -77,6 +77,23 @@ Scan the QR code with Expo Go, then open **Settings → Add endpoint**.
 
 For a local Ollama or LM Studio server, use your computer's LAN IP (not `localhost`) and make sure the server listens on all interfaces (`OLLAMA_HOST=0.0.0.0`). Plain-HTTP endpoints are allowed by the app config, which takes effect in development/production builds (`npx expo run:android` / `run:ios` or EAS).
 
+## Build Android APK
+
+Build a release APK locally and archive it in `builds/clanker-<version>.apk` (based on `expo.version` in `app.json`) so Gradle rebuilds don't overwrite earlier APKs:
+
+```sh
+npm run build:apk
+```
+
+Common flags (pass after `--`):
+
+- `--arch arm64-v8a` – smaller, faster single-ABI build for modern ARM64 phones
+- `--out <dir>` – custom output directory (or set `CLANKER_BUILD_DIR`)
+- `--install` – install the built APK over USB via `adb install -r`
+- `--skip-prebuild` / `--clean` – skip or clean `expo prebuild --platform android`
+- `--overwrite` – overwrite an existing `clanker-<version>.apk` instead of auto-numbering (`-2`, `-3`, …)
+- `--dry-run` – preview commands and output path without building
+
 ## Layout
 
 - `src/app/` – routes (chat screen in a drawer, settings stack)

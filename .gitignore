@@ -45,3 +45,6 @@ yarn-error.*
 
 # Native module build output
 modules/*/android/build/
+
+# Archived local APK builds
+/builds/

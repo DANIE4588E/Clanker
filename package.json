@@ -56,7 +56,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
     "test:remote": "node --test scripts/test-remote-*.mjs",
-    "test:subscriptions": "node --test scripts/test-subscriptions.mjs"
+    "test:subscriptions": "node --test scripts/test-subscriptions.mjs",
+    "build:apk": "node scripts/build-apk.mjs"
   },
   "private": true,
   "reanimated": {
