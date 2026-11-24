@@ -1,7 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useState } from 'react';
 import { BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
-import { OverKeyboardView } from 'react-native-keyboard-controller';
 import Animated, {
   Easing,
   Extrapolation,
@@ -13,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
+import { OverlayPortal } from '@/components/OverlayHost';
 import type { Colors } from '@/lib/theme';
 import { useTheme } from '@/lib/theme';
 
@@ -42,9 +42,11 @@ type Props = {
 
 /**
  * Popover anchored to the composer's plus button: the card fades/scales up from the button's
- * corner and its rows cascade in. Rendered in an over-keyboard layer (not a Modal, which grabs
- * focus and closes the keyboard) so it paints over the keyboard layer, is never clipped by the
- * composer box (which has overflow: hidden), and leaves the keyboard exactly where it is.
+ * corner and its rows cascade in. Rendered in the root in-window overlay host (not a Modal, which
+ * grabs focus and closes the keyboard, and not OverKeyboardView, whose separate Android
+ * WindowManager panel breaks touch hit-testing on Samsung One UI / foldables). Because the card
+ * floats above the composer (which already clears the keyboard), an in-window overlay paints
+ * unclipped over the whole screen while leaving the keyboard exactly where it is.
  */
 export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
   const { colors } = useTheme();
@@ -91,7 +93,7 @@ export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
 
   if (!mounted) return null;
   return (
-    <OverKeyboardView visible={mounted}>
+    <OverlayPortal>
       {/* Transparent: it only catches taps outside the card. No dimming, like the reference. */}
       <Pressable
         style={StyleSheet.absoluteFill}
@@ -112,13 +114,19 @@ export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
               index={i}
               open={open}
               reduceMotion={!!reduceMotion}
-              onPress={() => onPick(item.key)}
+              onPress={() => {
+                // Tear down at once before launching the native camera/gallery/file activity so
+                // the overlay doesn't linger while the Activity pauses and resumes.
+                open.set(0);
+                setMounted(false);
+                onPick(item.key);
+              }}
               colors={colors}
             />
           ))}
         </View>
       </Animated.View>
-    </OverKeyboardView>
+    </OverlayPortal>
   );
 }
 

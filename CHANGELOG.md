@@ -1,3 +1,11 @@
+# Clanker 1.3.0-beta.2
+
+## Fixes
+- **Attachment and context menus now respond reliably on Samsung and foldable devices**: moved the composer's attach menu (Camera, Photos, Files) and context usage popover out of `OverKeyboardView` into an in-window root overlay, fixing unresponsive taps on devices where separate Android overlay windows break touch hit-testing (such as Samsung Galaxy Z Fold 5, both folded and unfolded) while still keeping the keyboard open.
+- Dismisses open composer popovers cleanly when the keyboard hides or the screen folds/unfolds, and tears down the attach menu immediately before launching the system camera, photo gallery or file picker.
+
+---
+
 # Clanker 1.3.0-beta.1
 
 ## Use your ChatGPT or Claude subscription

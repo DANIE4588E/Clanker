@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DialogHost } from '@/components/Dialogs';
+import { OverlayHost } from '@/components/OverlayHost';
 import { ReplyNotifications } from '@/components/ReplyNotifications';
 import { ScriptRuntime } from '@/components/ScriptRuntime';
 import { UpdateCheck } from '@/components/Updates';
@@ -85,6 +86,7 @@ export default function RootLayout() {
               <Stack.Screen name="projects/edit" options={{ title: 'Edit project' }} />
               <Stack.Screen name="projects/instructions" options={{ title: 'Instructions' }} />
             </Stack>
+            <OverlayHost />
             <DialogHost />
             <UpdateCheck />
             <ReplyNotifications />

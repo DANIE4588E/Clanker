@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BackHandler, Dimensions, Pressable, StyleSheet, Text, View } from 'react-native';
-import { OverKeyboardView } from 'react-native-keyboard-controller';
 import Animated, { Easing, interpolate, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
+import { OverlayPortal } from '@/components/OverlayHost';
 import { formatTokens } from '@/lib/context';
 import { useTheme, type Colors } from '@/lib/theme';
 import type { ContextUsage } from '@/lib/usage';
@@ -51,13 +51,15 @@ type PopoverProps = {
   right: number;
   /** Screen distance from the top of the composer down to the bottom of the screen. */
   bottom: number;
+  /** Width of the overlay host, used to cap the card width accurately across fold states. */
+  maxWidth?: number;
   onClose: () => void;
 };
 
 /** Breakdown of the context estimate, popping up from the composer's right-hand corner.
- *  Lives in an over-keyboard layer (not a Modal, which grabs focus and closes the keyboard),
- *  so it floats over the keys and leaves them open. */
-export function ContextPopover({ visible, usage, right, bottom, onClose }: PopoverProps) {
+ *  Lives in the root in-window overlay host (not a Modal, which grabs focus and closes the
+ *  keyboard, and not OverKeyboardView, which breaks touch hit-testing on some Android devices). */
+export function ContextPopover({ visible, usage, right, bottom, maxWidth, onClose }: PopoverProps) {
   const { colors } = useTheme();
   const reduceMotion = useReducedMotion();
   // Past this share of the budget the app starts compressing history on its own.
@@ -107,10 +109,10 @@ export function ContextPopover({ visible, usage, right, bottom, onClose }: Popov
   const prefix = usage.estimated === false ? '' : '~';
   // Over budget, the bar shows each part's share of the total instead.
   const scale = Math.max(total, usage.budget);
-  const width = Math.min(CARD_WIDTH, Dimensions.get('window').width - 24);
+  const width = Math.min(CARD_WIDTH, (maxWidth ?? Dimensions.get('window').width) - 24);
 
   return (
-    <OverKeyboardView visible={mounted}>
+    <OverlayPortal>
       <Pressable
         style={StyleSheet.absoluteFill}
         pointerEvents={visible ? 'auto' : 'none'}
@@ -160,7 +162,7 @@ export function ContextPopover({ visible, usage, right, bottom, onClose }: Popov
           </Text>
         </View>
       </Animated.View>
-    </OverKeyboardView>
+    </OverlayPortal>
   );
 }
 

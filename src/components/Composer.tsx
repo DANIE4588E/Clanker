@@ -9,6 +9,7 @@ import { attachmentUri, deleteAttachment, pickFiles, pickImages } from '@/lib/at
 import { ContextMeter, ContextPopover } from '@/components/ContextUsage';
 import { EffortMeter } from '@/components/EffortMeter';
 import { FileIcon } from '@/components/FileIcon';
+import { measureInOverlay } from '@/components/OverlayHost';
 import type { AttachmentPart, FilePart, ImagePart } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import type { ContextUsage } from '@/lib/usage';
@@ -100,7 +101,12 @@ export function Composer({
   // Popovers: the attach menu hangs off the box's top-left corner and the context breakdown off
   // its top-right, measured at open time so they track the box wherever the keyboard pushed it.
   const [popover, setPopover] = useState<'attach' | 'context' | null>(null);
-  const [anchor, setAnchor] = useState({ x: TOOLBAR_PAD + 8, right: COLLAPSED.margin, bottom: 96 });
+  const [anchor, setAnchor] = useState({
+    x: TOOLBAR_PAD + 8,
+    right: COLLAPSED.margin,
+    bottom: 96,
+    hostWidth: Dimensions.get('window').width,
+  });
   // Collapsed, the text runs up to the right-hand buttons, so leave room for the effort one too.
   const collapsedPadRight =
     COLLAPSED.padRight + (effort ? BUTTON + TOOLBAR_GAP : 0) + (bothButtons ? BUTTON + TOOLBAR_GAP : 0);
@@ -150,15 +156,25 @@ export function Composer({
     }
   };
 
-  // Popovers float above the box, anchored where it measures to sit. They live in an
-  // over-keyboard layer, so opening one with the keyboard up leaves the keyboard right where
-  // it is (a plain Modal would take focus and close it, and dismissing made the box collapse
-  // out from under the menu).
+  // Dismissing the keyboard or folding/unfolding moves the composer out from under an open popover.
+  useEffect(() => {
+    if (!popover) return;
+    const close = () => setPopover(null);
+    const kb = Keyboard.addListener('keyboardDidHide', close);
+    const dim = Dimensions.addEventListener('change', close);
+    return () => {
+      kb.remove();
+      dim.remove();
+    };
+  }, [popover]);
+
+  // Popovers float above the box, anchored where it measures to sit in the root overlay host.
+  // Keeping them in the main Activity window (instead of Modal or OverKeyboardView) leaves the
+  // keyboard open without relying on a separate WindowManager panel.
   const openPopover = (which: 'attach' | 'context') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    box.current?.measureInWindow((x, y, width) => {
-      const window = Dimensions.get('window');
-      setAnchor({ x: x + TOOLBAR_PAD, right: window.width - x - width, bottom: window.height - y + 8 });
+    measureInOverlay(box.current, ({ x, y, width, hostWidth, hostHeight }) => {
+      setAnchor({ x: x + TOOLBAR_PAD, right: hostWidth - x - width, bottom: hostHeight - y + 8, hostWidth });
       setPopover(which);
     });
   };
@@ -197,6 +213,7 @@ export function Composer({
           usage={context}
           right={anchor.right}
           bottom={anchor.bottom}
+          maxWidth={anchor.hostWidth}
           onClose={() => setPopover(null)}
         />
       )}
