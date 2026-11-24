@@ -1,3 +1,26 @@
+# Clanker 1.3.0-beta.1
+
+## Use your ChatGPT or Claude subscription
+- Connect a **ChatGPT (Codex — Plus, Pro or Team)** or **Claude (Pro or Max)** subscription in **Settings → Subscriptions** without an API key — sign in directly or import an existing `~/.codex/auth.json` or `~/.claude/.credentials.json` login. Tokens stay in the device keychain and refresh automatically.
+- Add **multiple accounts** to a subscription and pick between **Auto balance** (routes to the account with the most remaining rolling-window quota, spreads traffic evenly and cools down rate-limited accounts) and **Manual** selection.
+- Live **usage cards** show remaining rolling-window capacity per account in Settings.
+
+## Highlight and ask Clanker
+- Select text smoothly **across paragraphs, lists and code blocks** in one stretch with native handles (Android; adds the `clanker-selection` native module, so it needs a new app build).
+- Tap **Ask Clanker** beside Copy in the selection menu to attach the excerpt above the composer — it sends as a markdown quote with your next message, including queued and steered follow-ups.
+
+## Clarification questions
+- The built-in agent can pause mid-turn with an inline **question card** when a request needs a decision or clarification — single-choice, multi-select or open-ended. Tap an option, type your own answer in the card or straight in the composer, or skip; Clanker sends a notification if it's waiting on you while in the background.
+
+## Continue interrupted replies
+- When a reply is stopped manually, hits the tool-call round limit or fails with an error, the empty composer shows a **Continue** button (play icon) that resumes the reply in place without adding a filler user message or losing prior thoughts, tool calls and text.
+
+## Remote backends and fixes
+- Remote backend model lists are now **grouped by provider** in the model picker and backend editor, with provider-level hiding alongside per-model hiding.
+- Fixed inverted chat scrolling bugs: no more jumping or drift while streaming or scrolled up, smoother nested scrolling inside long thoughts and tool outputs, chunked layout for long reasoning traces, and deferred storage writes during scrolling.
+
+---
+
 # Clanker 1.2.0
 
 Everything from the four 1.2.0 betas, now stable.
