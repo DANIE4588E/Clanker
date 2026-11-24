@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { uid } from '../storage';
 import {

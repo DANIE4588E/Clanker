@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import { ProviderError } from '../providers/http';
 import type { SubscriptionType } from '../providers/types';
 import type { SubscriptionCredentials } from './credentials';

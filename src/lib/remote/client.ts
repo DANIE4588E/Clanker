@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import { File } from 'expo-file-system';
 import { attachmentUri } from '@/lib/attachments';
 import { apiKeys, uid } from '@/lib/storage';

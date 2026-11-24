@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 
 export function joinUrl(base: string, path: string) {
   return base.replace(/\/+$/, '') + '/' + path.replace(/^\/+/, '');

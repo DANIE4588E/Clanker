@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import { useSettings, type SearchConfig, type SearchProvider } from '@/store/settings';
 import { joinUrl, ProviderError, request } from '../providers/http';
 import { apiKeys } from '../storage';

@@ -1,11 +1,14 @@
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import {
   accountUsageKey,
-  CLAUDE_CODE_USER_AGENT,
   CLAUDE_MESSAGES_BETA,
   CLAUDE_OAUTH_BETA,
+  claudeCodeUserAgent,
+  getCachedClaudeCodeVersion,
   getValidCredentials,
   parseClaudeUsageHeaders,
+  parseRequiredClaudeCodeVersion,
+  resolveClaudeCodeVersion,
   type SubscriptionCredentials,
 } from '../subscriptions';
 import {
@@ -26,12 +29,17 @@ const FALLBACK_MODELS: ModelInfo[] = [
   { id: 'claude-haiku-4-5-20251001', efforts: ['low', 'medium', 'high'], contextLength: 200_000 },
 ];
 
-function oauthHeaders(endpoint: Endpoint, creds: SubscriptionCredentials, beta: string): Record<string, string> {
+function oauthHeaders(
+  endpoint: Endpoint,
+  creds: SubscriptionCredentials,
+  beta: string,
+  clientVersion: string
+): Record<string, string> {
   return {
     Authorization: `Bearer ${creds.accessToken}`,
     'anthropic-version': '2023-06-01',
     'anthropic-beta': beta,
-    'User-Agent': CLAUDE_CODE_USER_AGENT,
+    'User-Agent': claudeCodeUserAgent(clientVersion),
     'x-app': 'cli',
     ...endpoint.headers,
   };
@@ -39,13 +47,14 @@ function oauthHeaders(endpoint: Endpoint, creds: SubscriptionCredentials, beta: 
 
 export const claudeSub: ProviderAdapter = {
   async listModels(endpoint) {
+    const clientVersion = await resolveClaudeCodeVersion();
     return withSubscriptionAccount(endpoint, {}, (account) => {
       const run = async (forceRefresh: boolean): Promise<{ models: ModelInfo[] }> => {
         const creds = await getValidCredentials(endpoint, { accountId: account.id, forceRefresh });
         try {
           const json = await getJson(
             joinUrl(endpoint.baseUrl, 'v1/models?limit=1000'),
-            oauthHeaders(endpoint, creds, CLAUDE_OAUTH_BETA)
+            oauthHeaders(endpoint, creds, CLAUDE_OAUTH_BETA, clientVersion)
           );
           const models = ((json.data ?? []) as AnthropicModel[]).map((m) => ({
             id: m.id,
@@ -66,6 +75,7 @@ export const claudeSub: ProviderAdapter = {
   },
 
   async stream({ endpoint, model, messages, system, effort, tools, signal, onToken, onReasoning, onToolDraft }) {
+    let clientVersion = getCachedClaudeCodeVersion();
     let started = false;
     const emitToken = (t: string) => {
       started = true;
@@ -85,7 +95,7 @@ export const claudeSub: ProviderAdapter = {
       : undefined;
 
     return withSubscriptionAccount(endpoint, { model, signal, hasStarted: () => started }, (account) => {
-      const run = async (forceRefresh: boolean) => {
+      const run = async (forceRefresh: boolean, retriedVersion: boolean) => {
         const creds = await getValidCredentials(endpoint, { accountId: account.id, forceRefresh });
         const body = buildAnthropicBody({
           endpoint,
@@ -100,13 +110,20 @@ export const claudeSub: ProviderAdapter = {
         let res;
         try {
           res = await request(joinUrl(endpoint.baseUrl, 'v1/messages?beta=true'), {
-            headers: { Accept: 'text/event-stream', ...oauthHeaders(endpoint, creds, CLAUDE_MESSAGES_BETA) },
+            headers: { Accept: 'text/event-stream', ...oauthHeaders(endpoint, creds, CLAUDE_MESSAGES_BETA, clientVersion) },
             body,
             signal,
           });
         } catch (e) {
           if (e instanceof ProviderError && e.status === 401 && !forceRefresh && creds.refreshToken) {
-            return run(true);
+            return run(true, retriedVersion);
+          }
+          if (e instanceof ProviderError && e.status === 400 && !retriedVersion) {
+            const required = parseRequiredClaudeCodeVersion(e.message);
+            if (required) {
+              clientVersion = await resolveClaudeCodeVersion({ force: true, minVersion: required });
+              return run(forceRefresh, true);
+            }
           }
           throw e;
         }
@@ -123,7 +140,7 @@ export const claudeSub: ProviderAdapter = {
         });
       };
 
-      return run(false);
+      return run(false, false);
     });
   },
 };

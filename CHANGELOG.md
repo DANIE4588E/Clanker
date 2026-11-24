@@ -1,3 +1,11 @@
+# Clanker 1.3.0-beta.3
+
+## Fixes
+- **Claude subscription chats support newer models**: Clanker refreshes its Claude Code compatibility version and retries once if Anthropic reports that a model requires a newer client.
+- **Fixed an Android crash caused by malformed cookies**: provider, remote backend, and web tool requests no longer use Android's shared cookie jar.
+
+---
+
 # Clanker 1.3.0-beta.2
 
 ## Fixes

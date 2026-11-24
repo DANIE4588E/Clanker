@@ -28,6 +28,7 @@ function loadSrc(relPath, extraDeps = {}) {
     vm.runInThisContext(`(function(require,module,exports){${code}\n})`, { filename: abs })(
       (spec) => {
         if (spec in deps) return deps[spec];
+        if (spec === '@/lib/net') return load('lib/net');
         if (spec.startsWith('./') || spec.startsWith('../')) {
           const resolved = path.relative(path.join(root, 'src'), path.resolve(path.dirname(abs), spec));
           return load(resolved);
@@ -293,4 +294,102 @@ test('withSubscriptionAccount fails over on 429 in auto mode but not in manual m
     /429/
   );
   assert.deepEqual(manualTried, ['acc_1']);
+});
+
+test('Claude Code version parsing, npm resolution, and 400 version-gate retry', async () => {
+  let npmVersion = '2.1.400';
+  let npmFail = false;
+  const mockFetch = async (url) => {
+    if (String(url).includes('@anthropic-ai/claude-code/latest')) {
+      if (npmFail) throw new Error('network down');
+      return { ok: true, json: async () => ({ version: npmVersion }) };
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const subs = loadSrc('lib/subscriptions/index', {
+    'expo/fetch': { fetch: mockFetch },
+    './credentials': {
+      credentialSlot: (a, b) => `${a}:${b ?? ''}`,
+      runExclusiveRefresh: (_s, fn) => fn(),
+      subscriptionAuth: { get: async () => null, set: async () => {} },
+    },
+  });
+
+  assert.equal(
+    subs.parseRequiredClaudeCodeVersion(
+      "400 Error: Claude Code 2.1.76 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again."
+    ),
+    '2.1.280'
+  );
+  assert.equal(subs.parseRequiredClaudeCodeVersion('400 Error: Invalid request'), null);
+  assert.equal(subs.claudeCodeUserAgent('2.1.331'), 'claude-cli/2.1.331 (external, cli)');
+
+  // Resolves latest from npm and caches it.
+  const resolved = await subs.resolveClaudeCodeVersion();
+  assert.equal(resolved, '2.1.400');
+  assert.equal(subs.getCachedClaudeCodeVersion(), '2.1.400');
+
+  // If npm is unreachable during a forced bump, honors minVersion floor.
+  npmFail = true;
+  const bumped = await subs.resolveClaudeCodeVersion({ force: true, minVersion: '2.2.0' });
+  assert.equal(bumped, '2.2.0');
+  assert.equal(subs.getCachedClaudeCodeVersion(), '2.2.0');
+
+  // End-to-end claudeSub.stream retry on 400 minimum-version error.
+  const http = loadSrc('lib/providers/http');
+  const seenUserAgents = [];
+  let attempt = 0;
+  const claudeSubMod = loadSrc('lib/providers/claudeSub', {
+    '@/store/subscriptionUsage': {
+      useSubscriptionUsage: { getState: () => ({ byAccount: {}, setAccountUsage() {} }) },
+    },
+    '../subscriptions': {
+      ...subs,
+      accountUsageKey: (epId, accId) => `${epId}:${accId}`,
+      getValidCredentials: async () => ({ accessToken: 'sk-ant-oat01-test' }),
+      parseClaudeUsageHeaders: () => null,
+    },
+    './subscriptionRoute': {
+      withSubscriptionAccount: async (_ep, _opts, fn) => fn({ id: 'acc_1', label: 'test', addedAt: 1 }),
+    },
+    './http': {
+      ...http,
+      request: async (_url, init) => {
+        attempt += 1;
+        seenUserAgents.push(init.headers['User-Agent']);
+        if (attempt === 1) {
+          throw new http.ProviderError(
+            '400 Error: Claude Code 2.2.0 does not support this model; version 2.3.10 or newer is required.',
+            400
+          );
+        }
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi!"}}\n\n' +
+                  'data: {"type":"message_stop"}\n\n'
+              )
+            );
+            controller.close();
+          },
+        });
+        return { headers: new Headers(), body: stream };
+      },
+    },
+  });
+
+  let reply = '';
+  await claudeSubMod.claudeSub.stream({
+    endpoint: { id: 'ep_claude', name: 'Claude', type: 'claude', baseUrl: 'https://api.anthropic.com' },
+    model: 'claude-opus-5-5',
+    messages: [{ role: 'user', text: 'Hi', images: [] }],
+    onToken: (t) => {
+      reply += t;
+    },
+  });
+  assert.equal(reply, 'Hi!');
+  assert.deepEqual(seenUserAgents, ['claude-cli/2.2.0 (external, cli)', 'claude-cli/2.3.10 (external, cli)']);
 });

@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import type { Endpoint } from './types';
 
 /** How long to wait for any of an endpoint's URLs to answer before giving up on probing. */

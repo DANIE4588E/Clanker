@@ -1,4 +1,4 @@
-import { fetch } from 'expo/fetch';
+import { fetch } from '@/lib/net';
 import type { BrandId } from '../modelNames';
 import { ProviderError } from '../providers/http';
 import type { Endpoint, SubscriptionType } from '../providers/types';
@@ -42,9 +42,85 @@ export const SUBSCRIPTION_META: Record<SubscriptionType, SubscriptionMeta> = {
   },
 };
 
-export const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.76 (external, cli)';
+export const DEFAULT_CLAUDE_CODE_VERSION = '2.1.331';
+export const CLAUDE_CODE_USER_AGENT = claudeCodeUserAgent(DEFAULT_CLAUDE_CODE_VERSION);
 export const CLAUDE_OAUTH_BETA = 'oauth-2025-04-20';
 export const CLAUDE_MESSAGES_BETA = 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14';
+
+const CLAUDE_VERSION_CACHE_MS = 6 * 60 * 60 * 1000;
+let cachedClaudeVersion: { version: string; at: number } | null = null;
+
+export function claudeCodeUserAgent(version = DEFAULT_CLAUDE_CODE_VERSION): string {
+  return `claude-cli/${version} (external, cli)`;
+}
+
+function compareSemver(a: string, b: string): number {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function maxSemver(...versions: (string | undefined)[]): string {
+  let best = DEFAULT_CLAUDE_CODE_VERSION;
+  for (const raw of versions) {
+    const m = raw?.trim().match(/^(\d+\.\d+\.\d+)/);
+    if (m && compareSemver(m[1], best) > 0) best = m[1];
+  }
+  return best;
+}
+
+/** Extracts the minimum Claude Code version from Anthropic's 400 client-version gate error, if present. */
+export function parseRequiredClaudeCodeVersion(message: string): string | null {
+  const m = message.match(/version\s+(\d+\.\d+\.\d+)\s+or\s+newer\s+is\s+required/i);
+  return m ? m[1] : null;
+}
+
+/** Returns the best known Claude Code CLI version synchronously without network latency. */
+export function getCachedClaudeCodeVersion(): string {
+  return maxSemver(cachedClaudeVersion?.version);
+}
+
+/**
+ * Resolves the latest published `@anthropic-ai/claude-code` version (cached for 6h, 2.5s timeout)
+ * so Anthropic's minimum Claude Code version checks don't block newly released models.
+ */
+export async function resolveClaudeCodeVersion(opts?: { force?: boolean; minVersion?: string }): Promise<string> {
+  const floor = maxSemver(cachedClaudeVersion?.version, opts?.minVersion);
+  if (!opts?.force && cachedClaudeVersion && Date.now() - cachedClaudeVersion.at < CLAUDE_VERSION_CACHE_MS) {
+    if (compareSemver(floor, cachedClaudeVersion.version) > 0) {
+      cachedClaudeVersion = { version: floor, at: Date.now() };
+    }
+    return floor;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch('https://registry.npmjs.org/@anthropic-ai/claude-code/latest', {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      const json = (await res.json()) as { version?: unknown };
+      if (typeof json?.version === 'string' && /^\d+\.\d+\.\d+/.test(json.version.trim())) {
+        const version = maxSemver(json.version, floor);
+        cachedClaudeVersion = { version, at: Date.now() };
+        return version;
+      }
+    }
+  } catch {
+    // Offline or slow registry: fall back to the bundled / required version.
+  } finally {
+    clearTimeout(timer);
+  }
+  if (opts?.minVersion) {
+    cachedClaudeVersion = { version: floor, at: Date.now() };
+  }
+  return floor;
+}
 
 // Refresh tokens slightly before they expire to avoid mid-turn 401s.
 const REFRESH_SKEW_MS = 2 * 60 * 1000;
@@ -128,11 +204,12 @@ export async function fetchSubscriptionUsage(
       return parseCodexUsage(await res.json());
     }
 
+    const clientVersion = await resolveClaudeCodeVersion();
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: {
         Authorization: `Bearer ${creds.accessToken}`,
         'anthropic-beta': CLAUDE_OAUTH_BETA,
-        'User-Agent': CLAUDE_CODE_USER_AGENT,
+        'User-Agent': claudeCodeUserAgent(clientVersion),
         Accept: 'application/json',
       },
     });
