@@ -11,7 +11,7 @@ import { firstLine } from './quotes';
 import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
-import { apiKeys, uid } from './storage';
+import { apiKeys, flushJsonStorage, uid } from './storage';
 import { availableTools, executeTool } from './tools';
 import { answerInWords } from './tools/ask';
 import { endPhoneRun, onPhoneStop } from './tools/phone';
@@ -103,6 +103,19 @@ export function regenerate(conversationId: string, messageId: string) {
   void runCompletion(conversationId);
 }
 
+/** Resumes an interrupted or failed assistant reply in place without adding a user message. */
+export function continueReply(conversationId: string) {
+  if (isRemoteChat(conversationId) || controllers.has(conversationId)) return;
+  const chats = useChats.getState();
+  const conversation = chats.conversations[conversationId];
+  const last = conversation?.messages[conversation.messages.length - 1];
+  if (!last || last.role !== 'assistant') return;
+  if (last.status !== 'error' && !last.interrupted) return;
+  const { active } = useSettings.getState();
+  if (active) chats.setModel(conversationId, active.endpointId, active.model);
+  void runCompletion(conversationId, { resumeMessageId: last.id });
+}
+
 export function stopStreaming(conversationId: string) {
   if (isRemoteChat(conversationId)) return stopRemoteChat(conversationId);
   controllers.get(conversationId)?.abort();
@@ -175,7 +188,7 @@ export function deleteQueued(conversationId: string, queuedId: string) {
   for (const a of message?.attachments ?? []) if (a.file) deleteAttachment(a.file);
 }
 
-async function runCompletion(id: string) {
+async function runCompletion(id: string, opts?: { resumeMessageId?: string }) {
   const chats = useChats.getState();
   const conversation = chats.conversations[id];
   if (!conversation) return;
@@ -190,8 +203,20 @@ async function runCompletion(id: string) {
       status: 'streaming',
       model: conversation.model,
     });
-  // A steered reply goes on in a new message after the user's (see `steer`).
-  let replyId = startReply();
+  // A steered reply goes on in a new message after the user's (see `steer`); continuing an
+  // interrupted reply reopens it in place so prior thoughts, tool calls and text stay intact.
+  let replyId: string;
+  if (opts?.resumeMessageId) {
+    replyId = opts.resumeMessageId;
+    useChats.getState().updateMessage(id, replyId, {
+      status: 'streaming',
+      error: undefined,
+      interrupted: undefined,
+      model: conversation.model,
+    });
+  } else {
+    replyId = startReply();
+  }
 
   if (!endpoint) {
     chats.updateMessage(id, replyId, { status: 'error', error: 'This endpoint no longer exists. Pick another model.' });
@@ -293,6 +318,7 @@ async function runCompletion(id: string) {
   };
 
   let apiKey: string | undefined;
+  let interrupted: string | undefined;
   try {
     apiKey = (await apiKeys.get(endpoint.id)) ?? undefined;
     for (let step = 1; ; step++) {
@@ -375,7 +401,7 @@ async function runCompletion(id: string) {
       const { maxSteps } = useSettings.getState();
       if (maxSteps && step >= maxSteps) {
         settleDrafts([]);
-        useChats.getState().appendText(id, replyId, `\n\n_Stopped after ${maxSteps} rounds of tool calls._`);
+        interrupted = `Stopped after ${maxSteps} rounds of tool calls`;
         break;
       }
 
@@ -417,16 +443,26 @@ async function runCompletion(id: string) {
       if (controller.signal.aborted) throw new Error('Stopped');
       if (steer()) step = 0;
     }
-    useChats.getState().updateMessage(id, replyId, { status: 'done' });
+    useChats.getState().updateMessage(id, replyId, { status: 'done', error: undefined, interrupted });
   } catch (e) {
     flush();
     markThoughtDone();
     const content = interruptContent(reply()?.content ?? []);
     if (controller.signal.aborted) {
-      useChats.getState().updateMessage(id, replyId, { status: 'done', content });
+      useChats.getState().updateMessage(id, replyId, {
+        status: 'done',
+        content,
+        error: undefined,
+        interrupted: 'Stopped by user',
+      });
     } else {
       const error = e instanceof Error ? e.message : String(e);
-      useChats.getState().updateMessage(id, replyId, { status: 'error', error, content });
+      useChats.getState().updateMessage(id, replyId, {
+        status: 'error',
+        error,
+        interrupted: undefined,
+        content,
+      });
       void notifyReplyFinished(id, replyId);
       return;
     }
@@ -437,8 +473,10 @@ async function runCompletion(id: string) {
     // Steers that never reached a step boundary wait in the queue like any other message.
     const queue = queueOf(id);
     if (queue.some((m) => m.steer)) useChats.getState().setQueue(id, queue.map(({ steer: _, ...m }) => m));
+    flushJsonStorage();
   }
 
+  const stopped = controller.signal.aborted || !!interrupted;
   const latest = useChats.getState().conversations[id];
   if (isSubscriptionType(endpoint.type)) {
     const usageStore = useSubscriptionUsage.getState();
@@ -448,20 +486,20 @@ async function runCompletion(id: string) {
   if (latest && !latest.titled && useSettings.getState().titleGeneration) void generateTitle(id, endpoint, apiKey, conversation.model);
   // A reply where the model managed memory itself needs no second pass, nor does a stopped one.
   const managed = reply()?.content.some((p) => p.type === 'tool' && p.name.startsWith('memory_'));
-  if (latest && !controller.signal.aborted && !managed && memoryOn(id) && useSettings.getState().memoryAuto) {
+  if (latest && !stopped && !managed && memoryOn(id) && useSettings.getState().memoryAuto) {
     void extractMemories(id, replyId, endpoint, apiKey, conversation.model);
   }
   // The next queued message goes out as the following turn. A stopped reply holds the queue until
   // the user sends from it.
-  if (!controller.signal.aborted) {
+  if (!stopped) {
     try {
       sendFromQueue(id);
     } catch {
       // No model to send with; the message stays queued.
     }
-    // Unless a queued message went out as the next turn, the agent is done.
-    if (!controllers.has(id)) void notifyReplyFinished(id, replyId);
   }
+  // Unless a queued message went out as the next turn (or the user stopped it manually), notify.
+  if (!controller.signal.aborted && !controllers.has(id)) void notifyReplyFinished(id, replyId);
 }
 
 async function generateTitle(id: string, endpoint: Endpoint, apiKey: string | undefined, model: string) {

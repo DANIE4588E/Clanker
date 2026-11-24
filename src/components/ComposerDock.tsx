@@ -56,6 +56,8 @@ type Props = {
   streaming: boolean;
   onSend: (text: string, attachments: AttachmentPart[]) => void;
   onStop: () => void;
+  /** Present when the latest turn was interrupted and can be continued in place. */
+  onContinue?: () => void;
   usage: ContextUsage | null;
   /** The composer's expansion; the screen reads it to keep content clear of the growing box. */
   progress: SharedValue<number>;
@@ -76,6 +78,7 @@ export function ComposerDock({
   streaming,
   onSend,
   onStop,
+  onContinue,
   usage,
   progress,
   onBaseHeight,
@@ -227,6 +230,7 @@ export function ComposerDock({
             streaming={streaming}
             onSend={onSend}
             onStop={onStop}
+            onContinue={onContinue}
             keyboardVisible={keyboardVisible}
             effort={effort ? { ...effort, onPress: () => setEffortOpen(true) } : undefined}
             context={usage}

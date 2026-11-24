@@ -10,24 +10,39 @@ function fileFor(name: string) {
   return new File(dataDir, `${name}.json`);
 }
 
-const WRITE_MS = 1000;
+const WRITE_MS = 2500;
+const DEFER_RETRY_MS = 500;
 
 const pending = new Map<string, StorageValue<unknown>>();
 let timer: ReturnType<typeof setTimeout> | null = null;
+let scrollDeferCount = 0;
 
-function flush() {
+function flush(force = false) {
   if (timer) clearTimeout(timer);
   timer = null;
+  if (!pending.size) return;
+  if (!force && scrollDeferCount > 0) {
+    // Avoid stalling the JS thread with JSON.stringify + sync disk writes mid-scroll.
+    timer = setTimeout(() => flush(false), DEFER_RETRY_MS);
+    return;
+  }
   for (const [name, value] of pending) fileFor(name).write(JSON.stringify(value));
   pending.clear();
 }
 
-/** Persist a rate-limit reservation before its network request can start. */
-export { flush as flushJsonStorage };
+/** Pause periodic disk flushes while a scroll gesture or fling is active. */
+export function setStorageWriteDeferred(deferred: boolean) {
+  scrollDeferCount = Math.max(0, scrollDeferCount + (deferred ? 1 : -1));
+}
+
+/** Persist a rate-limit reservation or settled reply immediately. */
+export function flushJsonStorage() {
+  flush(true);
+}
 
 // The app may be killed once it leaves the foreground, so waiting writes go out then.
 AppState.addEventListener('change', (state) => {
-  if (state !== 'active') flush();
+  if (state !== 'active') flush(true);
 });
 
 /**
@@ -45,7 +60,7 @@ export const jsonFileStorage: PersistStorage<any> = {
   },
   setItem: (name, value) => {
     pending.set(name, value);
-    timer ??= setTimeout(flush, WRITE_MS);
+    timer ??= setTimeout(() => flush(false), WRITE_MS);
   },
   removeItem: (name) => {
     pending.delete(name);

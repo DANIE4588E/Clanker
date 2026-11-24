@@ -118,6 +118,7 @@ export async function resumeRemoteChat(id: string) {
             remote: { state: snapshot.state, controls: snapshot.controls, files: snapshot.files },
             status: snapshot.state === 'failed' || snapshot.state === 'unknown' ? 'error' : remoteTerminal(snapshot.state) ? 'done' : 'streaming',
             error: snapshot.error,
+            interrupted: snapshot.state === 'cancelled' ? 'Stopped by user' : undefined,
             ...(snapshot.metrics ? { stats: { tokensPerSec: snapshot.metrics.tokensPerSec, cacheHit: snapshot.metrics.cacheHit } } : {}),
           });
           useChats.getState().setRemote(id, { cursor: snapshot.cursor, ...(snapshot.metrics?.context ? { context: snapshot.metrics.context } : {}) });

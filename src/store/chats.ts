@@ -20,6 +20,8 @@ export interface Message {
   createdAt: number;
   status: MessageStatus;
   error?: string;
+  /** Reason the reply stopped early (user stopped, step limit, app closed). */
+  interrupted?: string;
   model?: string;
   /** Thinking from replies saved before thoughts became `thought` content parts. */
   reasoning?: string;
@@ -269,7 +271,7 @@ export const useChats = create<ChatsState>()(
         appendReasoning: (id, messageId, text) =>
           patchMessage(id, messageId, (m) => {
             const last = m.content[m.content.length - 1];
-            return last?.type === 'thought'
+            return last?.type === 'thought' && last.ms == null
               ? { content: [...m.content.slice(0, -1), { ...last, text: last.text + text }] }
               : { content: [...m.content, { type: 'thought', text }] };
           }),
@@ -347,7 +349,9 @@ export const useChats = create<ChatsState>()(
             const content = m.content.map((p) =>
               p.type === 'tool' && p.background?.status === 'running' ? { ...p, background: { ...p.background, status: 'lost' as const } } : p
             );
-            return m.status === 'streaming' && c.backendId === 'local' ? { ...m, status: 'done', content: interruptContent(content) } : { ...m, content };
+            return m.status === 'streaming' && c.backendId === 'local'
+              ? { ...m, status: 'done', content: interruptContent(content), interrupted: 'Interrupted when the app closed' }
+              : { ...m, content };
           });
         }
         return { ...current, conversations };

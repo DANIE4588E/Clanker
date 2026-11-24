@@ -54,6 +54,8 @@ type Props = {
   streaming: boolean;
   onSend: (text: string, attachments: AttachmentPart[]) => void;
   onStop: () => void;
+  /** When set and the box is empty, replaces Send with a Continue button to resume the interrupted turn. */
+  onContinue?: () => void;
   /** Keeps the box expanded for exactly as long as the keyboard is on screen. */
   keyboardVisible: boolean;
   /** Shown when the selected model takes an effort level. */
@@ -77,6 +79,7 @@ export function Composer({
   streaming,
   onSend,
   onStop,
+  onContinue,
   keyboardVisible,
   effort,
   context,
@@ -87,6 +90,7 @@ export function Composer({
   const images = attachments.filter((a): a is ImagePart => a.type === 'image');
   const files = attachments.filter((a): a is FilePart => a.type === 'file');
   const canSend = !importing && (text.trim().length > 0 || attachments.length > 0 || quotes.length > 0);
+  const showContinue = !streaming && !importing && !canSend && !!onContinue;
   // While a reply streams, sending queues or steers, and Stop stays beside Send.
   const bothButtons = streaming && canSend;
   // A zero-impact overlay inside the box that we can measure (Animated.View refs are awkwardly
@@ -170,6 +174,12 @@ export function Composer({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onSend(text.trim(), attachments);
     setAttachments([]);
+  };
+
+  const continueTurn = () => {
+    if (!showContinue) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onContinue?.();
   };
 
   return (
@@ -306,16 +316,27 @@ export function Composer({
               <View style={[styles.stop, { backgroundColor: bothButtons ? colors.text : colors.accentFg }]} />
             </Pressable>
           )}
-          {(!streaming || bothButtons) && (
+          {showContinue ? (
             <Pressable
-              onPress={send}
-              disabled={!canSend}
+              onPress={continueTurn}
               hitSlop={6}
-              style={[styles.circle, { backgroundColor: colors.accent }, !canSend && { opacity: 0.45 }]}
-              accessibilityLabel="Send"
+              style={({ pressed }) => [styles.circle, { backgroundColor: colors.accent }, pressed && { opacity: 0.75 }]}
+              accessibilityLabel="Continue"
             >
-              <Feather name="arrow-up" size={20} color={colors.accentFg} />
+              <Feather name="play" size={17} color={colors.accentFg} style={styles.continueIcon} />
             </Pressable>
+          ) : (
+            (!streaming || bothButtons) && (
+              <Pressable
+                onPress={send}
+                disabled={!canSend}
+                hitSlop={6}
+                style={[styles.circle, { backgroundColor: colors.accent }, !canSend && { opacity: 0.45 }]}
+                accessibilityLabel="Send"
+              >
+                <Feather name="arrow-up" size={20} color={colors.accentFg} />
+              </Pressable>
+            )
           )}
         </View>
       </View>
@@ -386,5 +407,6 @@ const styles = StyleSheet.create({
   meterSlot: { height: BUTTON, overflow: 'hidden' },
   meterButton: { width: METER, height: BUTTON, alignItems: 'center', justifyContent: 'center' },
   circle: { width: BUTTON, height: BUTTON, borderRadius: BUTTON / 2, alignItems: 'center', justifyContent: 'center' },
+  continueIcon: { marginLeft: 2 },
   stop: { width: 12, height: 12, borderRadius: 2 },
 });

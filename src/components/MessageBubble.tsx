@@ -164,12 +164,48 @@ function Work({
   );
 }
 
+// Split long reasoning into stable append-only chunks so streaming only re-layouts the tail ~1KB
+// instead of forcing Android to rebuild a giant StaticLayout on every token flush.
+const THOUGHT_CHUNK_TARGET = 1200;
+const THOUGHT_CHUNK_MAX = 2400;
+
+function splitThoughtChunks(text: string): string[] {
+  if (text.length <= THOUGHT_CHUNK_MAX) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (text.length - start > THOUGHT_CHUNK_MAX) {
+    const minCut = start + THOUGHT_CHUNK_TARGET;
+    const maxCut = start + THOUGHT_CHUNK_MAX;
+    const nl = text.indexOf('\n', minCut);
+    if (nl !== -1 && nl <= maxCut) {
+      chunks.push(text.slice(start, nl));
+      start = nl + 1;
+    } else {
+      const sp = text.lastIndexOf(' ', maxCut);
+      const cut = sp > minCut ? sp : maxCut;
+      chunks.push(text.slice(start, cut));
+      start = cut === sp ? sp + 1 : cut;
+    }
+  }
+  if (start < text.length) chunks.push(text.slice(start));
+  return chunks;
+}
+
+const ThoughtChunk = memo(function ThoughtChunk({ text, color }: { text: string; color: string }) {
+  return (
+    <Text selectable={!areasSelect} style={[styles.thoughtsText, { color }]}>
+      {text}
+    </Text>
+  );
+});
+
 /** One stretch of the model's thinking: a "Thought for Ns" pill that shows or hides the text. */
 function Thoughts({ text, ms, live }: { text: string; ms?: number; live: boolean }) {
   const { colors } = useTheme();
   // Expanded while it streams; a tap pins the choice either way.
   const [openOverride, setOpenOverride] = useState<boolean | null>(null);
   const open = openOverride ?? live;
+  const chunks = useMemo(() => (open ? splitThoughtChunks(text) : []), [open, text]);
   return (
     <>
       <ThinkingIndicator
@@ -183,9 +219,9 @@ function Thoughts({ text, ms, live }: { text: string; ms?: number; live: boolean
         // Capped in height, so while thoughts stream it follows their end until the user drags back to read.
         <NestedScroll style={styles.thoughts} follow={live}>
           <SelectionArea style={[styles.thoughtsInner, { borderLeftColor: colors.border }]}>
-            <Text selectable={!areasSelect} style={[styles.thoughtsText, { color: colors.textSecondary }]}>
-              {text}
-            </Text>
+            {chunks.map((chunk, i) => (
+              <ThoughtChunk key={i} text={chunk} color={colors.textSecondary} />
+            ))}
           </SelectionArea>
         </NestedScroll>
       )}
@@ -247,7 +283,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
   // token, and while it works out its next step after a round of tool calls. Streamed thoughts
   // pulse in their own pill instead.
   const waiting =
-    streaming && (!lastSeg || (lastSeg.kind === 'tool' && (lastSeg.part.status === 'done' || lastSeg.part.status === 'error')));
+    streaming &&
+    (!lastSeg ||
+      (lastSeg.kind === 'tool' && (lastSeg.part.status === 'done' || lastSeg.part.status === 'error')) ||
+      (lastSeg.kind === 'thought' && lastSeg.ms != null));
   const split = splitWork(segments);
   const answered = !!split?.text && (!streaming || split.text.length > ANSWER_CHARS);
   // From the start of the reply to the start of its answer; replies saved without that time add up their steps.
@@ -269,7 +308,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
     seg.kind === 'tool' ? (
       !asking.includes(seg.part) && <ToolCall key={seg.part.id} part={seg.part} />
     ) : seg.kind === 'thought' ? (
-      <Thoughts key={`r${i}`} text={seg.text} ms={seg.ms} live={streaming && seg === lastSeg} />
+      <Thoughts key={`r${i}`} text={seg.text} ms={seg.ms} live={streaming && seg === lastSeg && seg.ms == null} />
     ) : (
       !!seg.text.trim() && <Markdown key={`t${i}`} value={seg.text} live={streaming && seg === lastSeg} />
     );
@@ -301,7 +340,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
 
       {message.status === 'error' && (
         <View style={[styles.error, { backgroundColor: colors.dangerBg, borderColor: colors.danger }]}>
-          <Text style={{ color: colors.danger, fontSize: 14, lineHeight: 20 }}>{message.error}</Text>
+          <View style={styles.reasonRow}>
+            <Feather name="alert-circle" size={15} color={colors.danger} style={styles.reasonIcon} />
+            <Text style={[styles.errorText, { color: colors.danger }]}>{message.error || 'Interrupted by an error'}</Text>
+          </View>
           {onRegenerate && <Pressable
             onPress={() => onRegenerate(message.id)}
             style={[styles.retry, { borderColor: colors.danger }]}
@@ -310,6 +352,13 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
             <Feather name="rotate-ccw" size={14} color={colors.danger} />
             <Text style={{ color: colors.danger, fontWeight: '500' }}>Retry</Text>
           </Pressable>}
+        </View>
+      )}
+
+      {message.status === 'done' && !!message.interrupted && (
+        <View style={[styles.interrupted, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Feather name="pause-circle" size={14} color={colors.textSecondary} />
+          <Text style={[styles.interruptedText, { color: colors.textSecondary }]}>{message.interrupted}</Text>
         </View>
       )}
 
@@ -408,6 +457,21 @@ const styles = StyleSheet.create({
   workHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, marginLeft: 2, alignSelf: 'flex-start' },
   workLabel: { fontSize: 15, fontWeight: '500' },
   error: { borderWidth: 1, borderRadius: 12, padding: 12, gap: 10, marginTop: 4 },
+  reasonRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  reasonIcon: { marginTop: 2.5 },
+  errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
+  interrupted: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 4,
+  },
+  interruptedText: { fontSize: 13, lineHeight: 18, flexShrink: 1 },
   retry: {
     flexDirection: 'row',
     alignItems: 'center',

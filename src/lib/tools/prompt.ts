@@ -204,7 +204,8 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
   if (!conversation) return;
   const units = unitsOf(historyOf(conversation, opts.replyId));
   const last = units[units.length - 1];
-  if (!last) return;
+  // Closing assistant text units aren't attached to notes; leave prior notes untouched when continuing mid-text.
+  if (!last || last.kind === 'text') return;
 
   const entries = workspaceFor(opts.conversationId).walk('', 41);
   const workspace = entries.length

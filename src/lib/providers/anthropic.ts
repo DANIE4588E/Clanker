@@ -90,6 +90,19 @@ export function buildAnthropicBody({
   // this request and the end of the previous one (the user turn before), so each request reads
   // what the last one wrote; the system prompt gets one too, shared by every chat.
   const wire = messages.map(toAnthropic);
+  // When continuing mid-text, the final message is an assistant prefill: Anthropic rejects
+  // trailing whitespace on it and rejects enabling thinking alongside a prefill.
+  const trailing = wire[wire.length - 1];
+  if (trailing?.role === 'assistant') {
+    const lastBlock = trailing.content[trailing.content.length - 1];
+    if (lastBlock?.type === 'text' && typeof lastBlock.text === 'string') {
+      const trimmed = lastBlock.text.trimEnd();
+      if (trimmed) trailing.content[trailing.content.length - 1] = { ...lastBlock, text: trimmed };
+      else trailing.content.pop();
+    }
+    if (!trailing.content.length) wire.pop();
+  }
+  const prefilling = wire[wire.length - 1]?.role === 'assistant';
   for (const m of wire.filter((m) => m.role === 'user').slice(-2)) {
     const last = m.content.length - 1;
     if (last >= 0) m.content[last] = { ...m.content[last], cache_control: CACHE };
@@ -105,7 +118,7 @@ export function buildAnthropicBody({
     // model that takes effort allows at least 32K.
     max_tokens: 8192,
     ...(systemBlocks.length ? { system: systemBlocks } : {}),
-    ...(effort ? { output_config: { effort }, ...thinkingBody(endpoint, model, effort) } : {}),
+    ...(effort && !prefilling ? { output_config: { effort }, ...thinkingBody(endpoint, model, effort) } : {}),
     ...(tools?.length
       ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
       : {}),

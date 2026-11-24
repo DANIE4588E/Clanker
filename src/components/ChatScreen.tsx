@@ -12,7 +12,7 @@ import { EdgeFade } from '@/components/EdgeFade';
 import { EmptyState } from '@/components/EmptyState';
 import { MessageList } from '@/components/MessageList';
 import { ModelPicker } from '@/components/ModelPicker';
-import { regenerate, stopStreaming, submitMessage } from '@/lib/chat';
+import { continueReply, regenerate, stopStreaming, submitMessage } from '@/lib/chat';
 import { brandOfBackendKind, brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { isSubscriptionType, type AttachmentPart } from '@/lib/providers';
 import { withQuotes } from '@/lib/quotes';
@@ -56,17 +56,18 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   const conversation = useChats(
     useShallow((s) => {
       const c = currentId ? s.conversations[currentId] : undefined;
-      return c
-        ? {
-            memory: c.memory,
-            backendId: c.backendId ?? 'local',
-            model: c.model,
-            pendingRemote: !!c.remote?.submissionId,
-            projectId: c.projectId,
-            empty: c.messages.length === 0,
-            streaming: c.messages.some((m) => m.status === 'streaming'),
-          }
-        : undefined;
+      if (!c) return undefined;
+      const last = c.messages[c.messages.length - 1];
+      return {
+        memory: c.memory,
+        backendId: c.backendId ?? 'local',
+        model: c.model,
+        pendingRemote: !!c.remote?.submissionId,
+        projectId: c.projectId,
+        empty: c.messages.length === 0,
+        streaming: c.messages.some((m) => m.status === 'streaming'),
+        interrupted: !!last && last.role === 'assistant' && (last.status === 'error' || !!last.interrupted),
+      };
     })
   );
   const active = useSettings((s) => s.active);
@@ -164,6 +165,16 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     [currentId, streaming]
   );
 
+  const canContinue = !remote && !streaming && !!conversation?.interrupted && !!currentId;
+  const onContinue = useCallback(() => {
+    if (!currentId || streaming) return;
+    try {
+      continueReply(currentId);
+    } catch (e) {
+      reportSendError(e);
+    }
+  }, [currentId, streaming]);
+
   // The header title: raw ids, or with friendly names the brand mark plus a tidied model name.
   // A remote chat carries its backend's mark (Hermes / DeepSeek Harness); local ones carry none.
   const rawTitle = remote ? (conversation?.model ?? remoteModel ?? backendName) : (active?.model ?? 'Clanker');
@@ -210,6 +221,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             streaming={streaming}
             onSend={send}
             onStop={() => currentId && stopStreaming(currentId)}
+            onContinue={canContinue ? onContinue : undefined}
             usage={usage}
             progress={composerProgress}
             onBaseHeight={setComposerBase}

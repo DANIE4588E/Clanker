@@ -53,27 +53,44 @@ class SelectionScopeView(context: Context, appContext: AppContext) : ExpoView(co
       return false
     }
 
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+  }
+
+  override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+    // Yoga lays out React children directly; prevent ExpoView's LinearLayout from re-laying them out horizontally.
+  }
+
   override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
     if (selecting) {
-      when (ev.actionMasked) {
-        MotionEvent.ACTION_MOVE -> Selector.extend(ev.rawX, ev.rawY)
-        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-          selecting = false
-          NativeGestureUtil.notifyNativeGestureEnded(this, ev)
-          Selector.endExtend()
+      if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+        selecting = false
+        Selector.endExtend()
+      } else {
+        when (ev.actionMasked) {
+          MotionEvent.ACTION_MOVE -> Selector.extend(ev.rawX, ev.rawY)
+          MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            selecting = false
+            NativeGestureUtil.notifyNativeGestureEnded(this, ev)
+            Selector.endExtend()
+          }
         }
+        return true
       }
-      return true
     }
     when (ev.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
+        removeCallbacks(longPress)
         down?.recycle()
         down = MotionEvent.obtain(ev)
         downX = ev.rawX
         downY = ev.rawY
-        if (!nested && Selector.hits(this, ev.rawX, ev.rawY)) {
+        val hit = !nested && Selector.hits(this, ev.rawX, ev.rawY)
+        if (hit) {
           postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
         }
+        // Return true when armed so an enclosing ScrollView delivers MOVE/UP/CANCEL to cancel longPress.
+        return super.dispatchTouchEvent(ev) || hit
       }
       MotionEvent.ACTION_MOVE -> if (hypot(ev.rawX - downX, ev.rawY - downY) > slop) removeCallbacks(longPress)
       MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> removeCallbacks(longPress)
