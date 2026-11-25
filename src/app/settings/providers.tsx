@@ -7,19 +7,24 @@ import { brandOfBackendKind, brandOfEndpoint, friendlyModelName } from '@/lib/mo
 import { accountsOf, primaryDisplayAccount } from '@/lib/subscriptions/router';
 import { compactUsageSummary } from '@/lib/subscriptions/usage';
 import { useTheme } from '@/lib/theme';
+import { formatBytes } from '@/lib/local/device';
 import { useBackends } from '@/store/backends';
+import { useLocalModels } from '@/store/localModels';
 import { useSettings } from '@/store/settings';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 
 const models = (n: number) => `${n} model${n === 1 ? '' : 's'}`;
 
-/** Settings → Providers: subscriptions, API endpoints and remote backends. */
+/** Settings → Providers: subscriptions, API endpoints, on-device models and remote backends. */
 export default function ProvidersScreen() {
   const { colors } = useTheme();
   const endpoints = useSettings((s) => s.endpoints);
   const friendly = useSettings((s) => s.friendlyModelNames);
   const subscriptions = endpoints.filter((e) => isSubscriptionType(e.type));
-  const apiEndpoints = endpoints.filter((e) => !isSubscriptionType(e.type));
+  const apiEndpoints = endpoints.filter((e) => !isSubscriptionType(e.type) && e.type !== 'local');
+  const localModels = useLocalModels((s) => s.models);
+  const localDownloads = useLocalModels((s) => Object.keys(s.downloads).length);
+  const localSize = localModels.reduce((n, m) => n + m.size, 0);
   const byAccount = useSubscriptionUsage((s) => s.byAccount);
   const remotes = useBackends((s) => s.remotes);
 
@@ -77,6 +82,28 @@ export default function ProvidersScreen() {
           />
         ))}
         <Row icon="plus" title="Add endpoint" tint="link" onPress={() => router.push('/settings/endpoint')} />
+      </Section>
+
+      <Section
+        title="Local"
+        footer="Experimental. Download GGUF models from Hugging Face and run them on this phone, with no connection or API key."
+      >
+        <Row
+          icon="smartphone"
+          title="On-device models"
+          value="Experimental"
+          detail={
+            localModels.length || localDownloads
+              ? [
+                  localModels.length ? `${models(localModels.length)} · ${formatBytes(localSize)}` : undefined,
+                  localDownloads ? `${localDownloads} downloading` : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+              : 'Browse and download models'
+          }
+          onPress={() => router.push('/settings/local')}
+        />
       </Section>
 
       <Section

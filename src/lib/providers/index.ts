@@ -2,6 +2,7 @@ import { anthropic } from './anthropic';
 import { claudeSub } from './claudeSub';
 import { codex } from './codex';
 import { gemini } from './gemini';
+import { local } from './local';
 import { ollama } from './ollama';
 import { ProviderError } from './http';
 import { openai } from './openai';
@@ -68,6 +69,8 @@ const adapters: Record<ProviderType, ProviderAdapter> = {
   gemini: withFailover(gemini),
   codex: withFailover(codex),
   claude: withFailover(claudeSub),
+  // Nothing to fail over to on the phone itself.
+  local,
 };
 
 export function getAdapter(type: ProviderType) {
@@ -81,6 +84,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   gemini: 'Google Gemini',
   codex: 'Codex subscription',
   claude: 'Claude subscription',
+  local: 'llama.cpp',
 };
 
 export type Preset = {

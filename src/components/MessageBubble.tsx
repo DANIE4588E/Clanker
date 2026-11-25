@@ -11,7 +11,9 @@ import { splitQuotes } from '@/lib/quotes';
 import { sitesOf, sourcesOf } from '@/lib/sources';
 import { formatStats } from '@/lib/stats';
 import { useTheme } from '@/lib/theme';
-import { messageText, type Message } from '@/store/chats';
+import { useActivityLabel } from '@/lib/local/useActivityLabel';
+import { messageText, useChats, type Message } from '@/store/chats';
+import { LOCAL_ENDPOINT_ID } from '@/store/localModels';
 import { describeCall } from '@/lib/tools/describe';
 import { useSettings } from '@/store/settings';
 import { BrandIcon } from './BrandIcon';
@@ -334,6 +336,12 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
   const detail = useSettings((s) => s.chatDetail);
   // The user's own choice to show or hide the work, kept over what the detail level would do.
   const [workOverride, setWorkOverride] = useState<boolean | null>(null);
+  // A reply from an on-device model first waits on the model loading and the prompt being read.
+  const localModel = useChats((s) => {
+    const c = s.conversations[conversationId];
+    return c?.endpointId === LOCAL_ENDPOINT_ID && (!c.backendId || c.backendId === 'local') ? c.model : undefined;
+  });
+  const activity = useActivityLabel(message.status === 'streaming' ? localModel : undefined);
   const stats = formatStats(message.stats, { speed: showSpeed, cache: showCache });
   const text = messageText(message);
   const images = message.content.filter((p): p is ImagePart => p.type === 'image');
@@ -453,7 +461,13 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
       ))}
       {/* Folded work already says the model is at it, in its header and current step. */}
       {waiting && !(split && !workOpen) && (
-        <ThinkingIndicator thinking expanded={false} toggleable={false} onToggle={() => {}} />
+        <ThinkingIndicator
+          thinking
+          expanded={false}
+          toggleable={false}
+          label={activity}
+          onToggle={() => {}}
+        />
       )}
       {!!made.length && <TurnFiles files={made} />}
       {!onRegenerate && <RemoteReply chatId={conversationId} reply={message.remote} reconnect={!!message.error} />}

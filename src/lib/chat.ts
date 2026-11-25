@@ -1,5 +1,6 @@
 import { interruptContent, messageText, useChats, type QueuedMessage } from '@/store/chats';
 import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/store/settings';
+import { localToolsOn } from '@/store/localModels';
 import { useUI } from '@/store/ui';
 import { deleteAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
 import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
@@ -263,8 +264,10 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string }) {
     useChats.getState().finishThought(id, replyId, ms);
   };
 
-  // With every tool turned off one by one, the chat runs as if tools were off altogether.
-  const offered = settings.tools ? availableTools(id) : [];
+  // With every tool turned off one by one, the chat runs as if tools were off altogether. On-device
+  // models only get them when turned on for the model: the prompt they add is slow to read on a phone.
+  const toolsOn = settings.tools && (endpoint.type !== 'local' || localToolsOn(conversation.model));
+  const offered = toolsOn ? availableTools(id) : [];
   const tools = offered.length ? offered : undefined;
   // The memories this chat's system prompt shows are fixed on its first request.
   ensureMemoryBase(id);

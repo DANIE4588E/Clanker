@@ -17,11 +17,13 @@ type Props = {
   /** False while there are no streamed thoughts to show; taps are then a no-op. */
   toggleable: boolean;
   thoughtMs?: number;
+  /** In place of "Thinking…", for a wait that isn't thinking, such as a model loading. */
+  label?: string;
   onToggle: () => void;
 };
 
 /** The pulsing "Thinking…" pill. Tapping it shows or hides the model's streamed thoughts. */
-export function ThinkingIndicator({ thinking, expanded, toggleable, thoughtMs, onToggle }: Props) {
+export function ThinkingIndicator({ thinking, expanded, toggleable, thoughtMs, label, onToggle }: Props) {
   const { colors } = useTheme();
   const pulse = useSharedValue(0.5);
 
@@ -49,7 +51,7 @@ export function ThinkingIndicator({ thinking, expanded, toggleable, thoughtMs, o
     >
       <Animated.View style={[styles.dot, { backgroundColor: colors.textSecondary }, dotStyle]} />
       <Text style={[styles.label, { color: colors.textSecondary }]}>
-        {thinking ? 'Thinking…' : thoughtMs ? thoughtLabel(thoughtMs) : 'Thoughts'}
+        {label ?? (thinking ? 'Thinking…' : thoughtMs ? thoughtLabel(thoughtMs) : 'Thoughts')}
       </Text>
       {toggleable && (
         <Feather

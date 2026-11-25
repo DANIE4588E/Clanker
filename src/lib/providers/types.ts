@@ -10,7 +10,8 @@ export type SubscriptionAccount = {
   addedAt: number;
 };
 
-export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'gemini' | SubscriptionType;
+/** `local` runs downloaded GGUF models on the phone itself. */
+export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'gemini' | 'local' | SubscriptionType;
 
 export function isSubscriptionType(type: ProviderType): type is SubscriptionType {
   return type === 'codex' || type === 'claude';

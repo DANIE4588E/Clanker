@@ -45,7 +45,8 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "extraProguardRules": "-keep class com.rnllama.** { *; }"
           }
         }
       ],
@@ -78,7 +79,8 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "llama.rn"
     ],
     "experiments": {
       "typedRoutes": true

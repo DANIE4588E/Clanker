@@ -11,6 +11,8 @@ import { OverlayHost } from '@/components/OverlayHost';
 import { ReplyNotifications } from '@/components/ReplyNotifications';
 import { ScriptRuntime } from '@/components/ScriptRuntime';
 import { UpdateCheck } from '@/components/Updates';
+// Keeps the On-device endpoint in step with downloaded models.
+import '@/lib/local/endpoint';
 import { useTheme } from '@/lib/theme';
 import { useSettings } from '@/store/settings';
 
@@ -78,6 +80,10 @@ export default function RootLayout() {
               <Stack.Screen name="settings/backend" options={{ presentation: 'modal', title: 'Backend' }} />
               <Stack.Screen name="settings/endpoint" options={{ presentation: 'modal', title: 'Endpoint' }} />
               <Stack.Screen name="settings/subscription" options={{ presentation: 'modal', title: 'Subscription' }} />
+              <Stack.Screen name="settings/local" options={{ title: 'On-device models' }} />
+              <Stack.Screen name="settings/local-browse" options={{ title: 'Hugging Face' }} />
+              <Stack.Screen name="settings/local-repo" options={{ title: '' }} />
+              <Stack.Screen name="settings/local-model" options={{ title: '' }} />
               <Stack.Screen name="pair" options={{ headerShown: false, animation: 'none' }} />
               <Stack.Screen name="settings/workspace" options={{ title: 'Workspace files' }} />
               <Stack.Screen name="settings/tools" options={{ title: 'Files & code' }} />

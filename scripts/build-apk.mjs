@@ -9,6 +9,7 @@
  *   npm run build:apk -- --arch arm64-v8a
  *   npm run build:apk -- --skip-prebuild --install
  *   npm run build:apk -- --out D:\ClankerBuilds
+ *   npm run build:apk -- --preview      (installs beside the regular app; see app.config.js)
  */
 
 import { spawnSync } from 'node:child_process';
@@ -21,6 +22,8 @@ const ROOT = path.resolve(__dirname, '..');
 const ANDROID_DIR = path.join(ROOT, 'android');
 const RELEASE_APK = path.join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
 const IS_WIN = process.platform === 'win32';
+/** Records which variant android/ was generated for; switching variants needs a clean prebuild. */
+const VARIANT_MARKER = path.join(ANDROID_DIR, '.clanker-variant');
 
 function printHelp() {
   console.log(`Build a local Clanker release APK and archive it as clanker-<version>.apk.
@@ -36,6 +39,8 @@ Options:
   --clean            Run \`npx expo prebuild --platform android --clean\`
   --no-minify        Do not pass -Pandroid.enableMinifyInReleaseBuilds=true
   --overwrite        Overwrite clanker-<version>.apk if it already exists
+  --preview          Build "Clanker Preview", a separate app that installs beside the
+                     regular one (own package id and data); saved as clanker-preview-<version>.apk
   --install          Run \`adb install -r\` on the built APK after copying
   --dry-run          Print planned commands and output path without building
   -h, --help         Show this help message
@@ -51,6 +56,7 @@ function parseArgs(argv) {
     minify: true,
     overwrite: false,
     install: false,
+    preview: false,
     dryRun: false,
     help: false,
   };
@@ -63,6 +69,7 @@ function parseArgs(argv) {
     else if (arg === '--no-minify') opts.minify = false;
     else if (arg === '--overwrite') opts.overwrite = true;
     else if (arg === '--install') opts.install = true;
+    else if (arg === '--preview') opts.preview = true;
     else if (arg === '--dry-run') opts.dryRun = true;
     else if (arg === '--out' || arg.startsWith('--out=')) {
       const value = arg.includes('=') ? arg.slice('--out='.length) : argv[++i];
@@ -93,9 +100,9 @@ function readAppVersion() {
   return version.trim();
 }
 
-function resolveOutputPath(outDir, version, overwrite) {
+function resolveOutputPath(outDir, version, overwrite, preview) {
   const safeVersion = version.replace(/[^a-zA-Z0-9._+-]/g, '-');
-  const baseName = `clanker-${safeVersion}`;
+  const baseName = `clanker-${preview ? 'preview-' : ''}${safeVersion}`;
   let candidate = path.join(outDir, `${baseName}.apk`);
   if (overwrite || !fs.existsSync(candidate)) return candidate;
 
@@ -105,7 +112,7 @@ function resolveOutputPath(outDir, version, overwrite) {
   }
 }
 
-function run(command, args, { cwd = ROOT, dryRun = false } = {}) {
+function run(command, args, { cwd = ROOT, dryRun = false, env } = {}) {
   const display = `${command} ${args.join(' ')}`.trim();
   console.log(`\n> (${path.relative(ROOT, cwd) || '.'}) ${display}`);
   if (dryRun) return;
@@ -113,6 +120,7 @@ function run(command, args, { cwd = ROOT, dryRun = false } = {}) {
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'inherit',
+    env: env ?? process.env,
     shell: IS_WIN && /\.(cmd|bat)$/i.test(command),
   });
 
@@ -130,15 +138,28 @@ function main() {
   }
 
   const version = readAppVersion();
-  const destPath = resolveOutputPath(opts.outDir, version, opts.overwrite);
+  const variant = opts.preview ? 'preview' : 'release';
+  // app.config.js reads APP_VARIANT during prebuild, and Gradle's bundling step reads the app config too.
+  const env = { ...process.env, APP_VARIANT: variant };
+  const destPath = resolveOutputPath(opts.outDir, version, opts.overwrite, opts.preview);
 
-  console.log(`Clanker version : ${version}`);
+  console.log(`Clanker version : ${version}${opts.preview ? ' (preview)' : ''}`);
   console.log(`Output APK      : ${destPath}`);
+
+  // android/ generated for the other variant has the other package id baked in.
+  const builtVariant = fs.existsSync(VARIANT_MARKER) ? fs.readFileSync(VARIANT_MARKER, 'utf8').trim() : 'release';
+  const switching = fs.existsSync(ANDROID_DIR) && builtVariant !== variant;
+  if (switching && opts.skipPrebuild) {
+    throw new Error(`android/ was generated for the ${builtVariant} variant; drop --skip-prebuild to regenerate it.`);
+  }
 
   if (!opts.skipPrebuild || !fs.existsSync(ANDROID_DIR)) {
     const prebuildArgs = ['expo', 'prebuild', '--platform', 'android'];
-    if (opts.clean) prebuildArgs.push('--clean');
-    run(IS_WIN ? 'npx.cmd' : 'npx', prebuildArgs, { cwd: ROOT, dryRun: opts.dryRun });
+    if (opts.clean || switching) prebuildArgs.push('--clean');
+    if (switching) console.log(`
+Switching android/ from ${builtVariant} to ${variant}: regenerating it.`);
+    run(IS_WIN ? 'npx.cmd' : 'npx', prebuildArgs, { cwd: ROOT, dryRun: opts.dryRun, env });
+    if (!opts.dryRun) fs.writeFileSync(VARIANT_MARKER, variant);
   } else {
     console.log('\nSkipping expo prebuild (--skip-prebuild).');
   }
@@ -148,7 +169,7 @@ function main() {
   if (opts.minify) gradleArgs.push('-Pandroid.enableMinifyInReleaseBuilds=true');
   if (opts.arch) gradleArgs.push(`-PreactNativeArchitectures=${opts.arch}`);
 
-  run(gradleCmd, gradleArgs, { cwd: ANDROID_DIR, dryRun: opts.dryRun });
+  run(gradleCmd, gradleArgs, { cwd: ANDROID_DIR, dryRun: opts.dryRun, env });
 
   if (opts.dryRun) {
     console.log(`\n[dry-run] Would copy:\n  from: ${RELEASE_APK}\n  to:   ${destPath}`);
@@ -162,7 +183,7 @@ function main() {
 
   fs.mkdirSync(opts.outDir, { recursive: true });
   // Re-resolve right before copying in case another build wrote the same name while Gradle ran.
-  const finalPath = resolveOutputPath(opts.outDir, version, opts.overwrite);
+  const finalPath = resolveOutputPath(opts.outDir, version, opts.overwrite, opts.preview);
   fs.copyFileSync(RELEASE_APK, finalPath);
 
   const sizeMb = (fs.statSync(finalPath).size / (1024 * 1024)).toFixed(1);
