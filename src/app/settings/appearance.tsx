@@ -24,7 +24,7 @@ const DETAIL_FOOTERS: Record<ChatDetail, string> = {
   verbose: 'Every step and thought shows, and stays open until you fold it.',
 };
 
-/** Settings → Appearance: theme, model names and what shows alongside replies. */
+/** Settings → Appearance: theme, model names, the new chat screen and what shows alongside replies. */
 export default function AppearanceScreen() {
   const { colors } = useTheme();
   const theme = useSettings((s) => s.theme);
@@ -37,6 +37,8 @@ export default function AppearanceScreen() {
   const setDecodeSpeed = useSettings((s) => s.setDecodeSpeed);
   const cacheHits = useSettings((s) => s.cacheHits);
   const setCacheHits = useSettings((s) => s.setCacheHits);
+  const activityCalendar = useSettings((s) => s.activityCalendar);
+  const setActivityCalendar = useSettings((s) => s.setActivityCalendar);
   const chatDetail = useSettings((s) => s.chatDetail);
   const setChatDetail = useSettings((s) => s.setChatDetail);
 
@@ -55,6 +57,16 @@ export default function AppearanceScreen() {
           detail="Show provider logos and tidy names instead of long model and provider ids"
           value={friendly}
           onValueChange={setFriendly}
+        />
+      </Section>
+
+      <Section title="New chat">
+        <ToggleRow
+          icon="calendar"
+          title="Activity calendar"
+          detail="Show your recent token use on the new chat screen"
+          value={activityCalendar}
+          onValueChange={setActivityCalendar}
         />
       </Section>
 

@@ -1,10 +1,29 @@
 import Feather from '@expo/vector-icons/Feather';
+import { router } from 'expo-router';
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { dailyTotals, useUsageEvents } from '@/lib/activity';
+import { ActivityHeatmap } from './ActivityHeatmap';
 import { BrandIcon, type BrandId } from './BrandIcon';
 import { useSuggestions } from '@/lib/suggestions';
 import { useTheme } from '@/lib/theme';
+import { useSettings } from '@/store/settings';
 
 const SUGGESTION_COLORS = ['#4C8DF6', '#EA4335', '#34A853', '#F4B400'];
+
+// About three months: one column per week.
+const HEATMAP_WEEKS = 13;
+
+/** The last few months of token use, opening the Usage page. */
+function RecentActivity() {
+  const events = useUsageEvents();
+  const days = useMemo(() => dailyTotals(events), [events]);
+  return (
+    <View style={styles.activity}>
+      <ActivityHeatmap days={days} weeks={HEATMAP_WEEKS} cell={16} caption onPress={() => router.push('/usage')} />
+    </View>
+  );
+}
 
 type Props = {
   /** The remote backend the chat about to be started runs on; unset for the built-in agent. */
@@ -24,6 +43,7 @@ type Props = {
 export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, onAddSubscription, memoryOff, project, remote, remoteBrand }: Props) {
   const { colors } = useTheme();
   const { suggestions, loading, error } = useSuggestions(project, memoryOff);
+  const activityCalendar = useSettings((s) => s.activityCalendar);
 
   if (!hasEndpoint) {
     return (
@@ -90,6 +110,7 @@ export function EmptyState({ hasEndpoint, onSuggestion, onAddEndpoint, onAddSubs
           </Text>
         </View>
       )}
+      {activityCalendar && !project && !remote && !memoryOff && <RecentActivity />}
       {loading && (
         <Text style={[styles.status, styles.loading, { color: colors.textTertiary }]}>Generating suggestions…</Text>
       )}
@@ -128,6 +149,7 @@ const styles = StyleSheet.create({
   rowText: { fontSize: 17, flexShrink: 1 },
   status: { fontSize: 14, flexShrink: 1 },
   loading: { paddingVertical: 14 },
+  activity: { flex: 1, justifyContent: 'center', paddingVertical: 12 },
   temporary: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12 },
   temporaryTitle: { fontSize: 20, fontWeight: '600' },
   temporaryText: { fontSize: 15, lineHeight: 21, textAlign: 'center' },

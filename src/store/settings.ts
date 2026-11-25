@@ -57,6 +57,8 @@ interface SettingsState {
   decodeSpeed: boolean;
   /** Whether replies show how much of the prompt the server had cached over the chat's last 10 responses. */
   cacheHits: boolean;
+  /** Whether a new chat shows the activity calendar of recent token use. */
+  activityCalendar: boolean;
   /** Whether models with tools also get web search and fetch. */
   web: boolean;
   search: SearchConfig;
@@ -91,6 +93,7 @@ interface SettingsState {
   setContextUsage: (on: boolean) => void;
   setDecodeSpeed: (on: boolean) => void;
   setCacheHits: (on: boolean) => void;
+  setActivityCalendar: (on: boolean) => void;
   setWeb: (on: boolean) => void;
   setSearch: (search: SearchConfig) => void;
   setCompression: (compression: CompressionConfig) => void;
@@ -120,6 +123,7 @@ export const useSettings = create<SettingsState>()(
       contextUsage: false,
       decodeSpeed: false,
       cacheHits: false,
+      activityCalendar: true,
       web: true,
       search: { provider: 'firecrawl' },
       compression: COMPRESSION_DEFAULTS,
@@ -177,6 +181,7 @@ export const useSettings = create<SettingsState>()(
       setContextUsage: (contextUsage) => set({ contextUsage }),
       setDecodeSpeed: (decodeSpeed) => set({ decodeSpeed }),
       setCacheHits: (cacheHits) => set({ cacheHits }),
+      setActivityCalendar: (activityCalendar) => set({ activityCalendar }),
       setWeb: (web) => set({ web }),
       setSearch: (search) => set({ search }),
       setCompression: (compression) => set({ compression }),

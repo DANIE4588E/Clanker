@@ -92,6 +92,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/search" options={{ title: 'Web access' }} />
               <Stack.Screen name="settings/memory" options={{ title: 'Memory' }} />
               <Stack.Screen name="settings/files" options={{ title: 'Files' }} />
+              <Stack.Screen name="usage" options={{ title: 'Usage' }} />
               <Stack.Screen name="projects/index" options={{ title: 'Projects' }} />
               <Stack.Screen name="projects/[id]" options={{ title: '' }} />
               <Stack.Screen name="projects/chat" options={{ headerShown: false }} />
