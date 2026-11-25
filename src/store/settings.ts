@@ -17,6 +17,9 @@ export const COMPRESSION_DEFAULTS: CompressionConfig = { trigger: 60, target: 30
 /** What sending does while a reply is running: wait for it to finish, or steer it mid-task. */
 export type FollowUpMode = 'queue' | 'steer';
 
+/** When prompt suggestions are written afresh: once a day, each time the app starts, or for every new chat. */
+export type SuggestionRefresh = 'daily' | 'launch' | 'chat';
+
 export type SearchProvider = 'firecrawl' | 'duckduckgo' | 'exa' | 'brave' | 'tavily' | 'searxng';
 
 /** Where web_search sends queries. Keys live in SecureStore under `search-<provider>`. */
@@ -62,6 +65,11 @@ interface SettingsState {
   titleGeneration: boolean;
   /** Whether new chats show automatically generated prompt suggestions. */
   suggestions: boolean;
+  /** The model that names chats, or null for the chat's own model. */
+  titleModel: ModelRef | null;
+  /** The model that writes prompt suggestions, or null for the selected model. */
+  suggestionModel: ModelRef | null;
+  suggestionRefresh: SuggestionRefresh;
   /** Whether providers and models show as brand marks with tidied names instead of raw ids. */
   friendlyModelNames: boolean;
   followUp: FollowUpMode;
@@ -84,6 +92,9 @@ interface SettingsState {
   setShowArchived: (on: boolean) => void;
   setTitleGeneration: (on: boolean) => void;
   setSuggestions: (on: boolean) => void;
+  setTitleModel: (ref: ModelRef | null) => void;
+  setSuggestionModel: (ref: ModelRef | null) => void;
+  setSuggestionRefresh: (when: SuggestionRefresh) => void;
   setFriendlyModelNames: (on: boolean) => void;
   setFollowUp: (mode: FollowUpMode) => void;
 }
@@ -109,6 +120,9 @@ export const useSettings = create<SettingsState>()(
       showArchived: false,
       titleGeneration: true,
       suggestions: true,
+      titleModel: null,
+      suggestionModel: null,
+      suggestionRefresh: 'launch',
       friendlyModelNames: true,
       followUp: 'queue',
       upsertEndpoint: (endpoint) => {
@@ -137,7 +151,10 @@ export const useSettings = create<SettingsState>()(
           active = next ? { endpointId: next.id, model: next.models[0] } : null;
         }
         const efforts = Object.fromEntries(Object.entries(get().efforts).filter(([k]) => !k.startsWith(`${id}/`)));
-        set({ endpoints, active, efforts });
+        // Side tasks that used the removed endpoint go back to the chat's model.
+        const titleModel = get().titleModel?.endpointId === id ? null : get().titleModel;
+        const suggestionModel = get().suggestionModel?.endpointId === id ? null : get().suggestionModel;
+        set({ endpoints, active, efforts, titleModel, suggestionModel });
       },
       setActive: (active) => set({ active }),
       setTheme: (theme) => set({ theme }),
@@ -159,6 +176,9 @@ export const useSettings = create<SettingsState>()(
       setShowArchived: (showArchived) => set({ showArchived }),
       setTitleGeneration: (titleGeneration) => set({ titleGeneration }),
       setSuggestions: (suggestions) => set({ suggestions }),
+      setTitleModel: (titleModel) => set({ titleModel }),
+      setSuggestionModel: (suggestionModel) => set({ suggestionModel }),
+      setSuggestionRefresh: (suggestionRefresh) => set({ suggestionRefresh }),
       setFriendlyModelNames: (friendlyModelNames) => set({ friendlyModelNames }),
       setFollowUp: (followUp) => set({ followUp }),
     }),
@@ -226,6 +246,16 @@ export function resolveBudget(endpoint: Pick<Endpoint, 'baseUrl' | 'contexts' | 
   const window = endpoint.contexts?.[model];
   if (window) return Math.floor(window * 0.75);
   return LARGE_CONTEXT_HOSTS.test(endpoint.baseUrl) ? 96_000 : DEFAULT_BUDGET;
+}
+
+/**
+ * The endpoint and model a side task (titles, suggestions) should use: its own choice while that
+ * model still exists, otherwise null so the caller falls back to the chat's model.
+ */
+export function resolveTaskModel(endpoints: Endpoint[], ref: ModelRef | null) {
+  if (!ref) return null;
+  const endpoint = endpoints.find((e) => e.id === ref.endpointId);
+  return endpoint?.models.includes(ref.model) ? { endpoint, model: ref.model } : null;
 }
 
 export function useEndpoint(id: string | undefined) {

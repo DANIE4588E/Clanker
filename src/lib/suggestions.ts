@@ -4,8 +4,8 @@ import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { messageText, useChatList, useChats, type Conversation } from '@/store/chats';
 import { useProjects, type Project } from '@/store/projects';
-import { useSettings } from '@/store/settings';
-import { SUGGESTION_INTERVAL, useSuggestionCache } from '@/store/suggestions';
+import { resolveTaskModel, useSettings } from '@/store/settings';
+import { SUGGESTION_INTERVAL, suggestionsDue, useSuggestionCache } from '@/store/suggestions';
 import { useUI } from '@/store/ui';
 import { useBackends } from '@/store/backends';
 import { getAdapter, type Endpoint } from './providers';
@@ -124,13 +124,21 @@ export async function generateSuggestions(
   return suggestions;
 }
 
-/** Reuses persisted results and shares one generation allowance across every screen and model. */
+/**
+ * Reuses persisted results until the refresh setting makes a new set due: daily, each app launch,
+ * or each new chat. The allowance is shared across every screen and model.
+ */
 export function useSuggestions(project?: string, memoryOff?: boolean) {
   const suggestionsEnabled = useSettings((s) => s.suggestions);
   const selectedBackend = useBackends((s) => s.selected);
-  const endpoint = useSettings((s) => s.endpoints.find((e) => e.id === s.active?.endpointId));
-  const model = useSettings((s) => s.active?.model);
+  // The model picked for suggestions in Settings, or the selected chat model when none is (or it's gone).
+  const endpoint = useSettings((s) => {
+    const picked = resolveTaskModel(s.endpoints, s.suggestionModel);
+    return picked ? picked.endpoint : s.endpoints.find((e) => e.id === s.active?.endpointId);
+  });
+  const model = useSettings((s) => resolveTaskModel(s.endpoints, s.suggestionModel)?.model ?? s.active?.model);
   const memoryEnabled = useSettings((s) => s.memory);
+  const refreshMode = useSettings((s) => s.suggestionRefresh);
   const currentId = useUI((s) => s.currentId);
   const newChatProjectId = useUI((s) => s.newChatProjectId);
   const projects = useProjects((s) => s.projects);
@@ -154,7 +162,7 @@ export function useSuggestions(project?: string, memoryOff?: boolean) {
     if (!enabled || !endpoint || !model || !endpoint.models.includes(model)) return;
     const refresh = () => {
       const cache = useSuggestionCache.getState();
-      if (cache.lastAttemptAt !== null && Date.now() < cache.lastAttemptAt + SUGGESTION_INTERVAL) return;
+      if (!suggestionsDue(cache.lastAttemptAt)) return;
       const chats = useChats.getState().conversations;
       const projects = useProjects.getState().projects;
       const recent = recentSuggestionChats(chats, projects, currentId, projectId, historyEnabled);
@@ -164,7 +172,8 @@ export function useSuggestions(project?: string, memoryOff?: boolean) {
       );
     };
     refresh();
-    const timeout = lastAttemptAt === null ? undefined : setTimeout(
+    // Only the daily setting comes due while the app stays open on a new chat.
+    const timeout = lastAttemptAt === null || refreshMode !== 'daily' ? undefined : setTimeout(
       refresh, Math.max(1, lastAttemptAt + SUGGESTION_INTERVAL - Date.now())
     );
     const subscription = AppState.addEventListener('change', (state) => {
@@ -174,7 +183,7 @@ export function useSuggestions(project?: string, memoryOff?: boolean) {
       clearTimeout(timeout);
       subscription.remove();
     };
-  }, [enabled, endpoint, model, project, scope, currentId, projectId, historyEnabled, lastAttemptAt]);
+  }, [enabled, endpoint, model, project, scope, currentId, projectId, historyEnabled, lastAttemptAt, refreshMode]);
 
   return {
     suggestions: enabled && cacheVisible ? cached.suggestions : [],

@@ -2,7 +2,10 @@ import type { File } from 'expo-file-system';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { jsonFileStorage } from '@/lib/storage';
-import { downloadRelease, fetchNewerRelease, installApk, type Release } from '@/lib/updates';
+import { downloadRelease, fetchNewerRelease, installApk, isNewer, type Release } from '@/lib/updates';
+
+/** How often the automatic check asks GitHub: each time the app starts, or once a day. */
+export type UpdateInterval = 'launch' | 'daily';
 
 export type UpdatePhase =
   | { phase: 'idle' }
@@ -18,12 +21,19 @@ export type UpdatePhase =
 interface UpdatesState {
   /** When GitHub was last asked, in ms; the launch check skips a day after it. */
   lastCheck: number;
-  /** Whether launching the app asks GitHub, at most once a day. */
+  /** Whether the app asks GitHub on its own, as often as checkInterval says. */
   checkOnLaunch: boolean;
+  checkInterval: UpdateInterval;
+  /** A version the user chose not to hear about; only a newer one is offered on its own. */
+  dismissedVersion: string | null;
   /** Whether pre-releases count as updates, not just stable releases. */
   prereleases: boolean;
   status: UpdatePhase;
   setCheckOnLaunch: (on: boolean) => void;
+  setCheckInterval: (interval: UpdateInterval) => void;
+  dismiss: (version: string) => void;
+  /** Whether this release, or a newer one, was dismissed. */
+  isDismissed: (release: Release) => boolean;
   setPrereleases: (on: boolean) => void;
   /** The newer release, or null. Throws when GitHub can't be reached. */
   check: () => Promise<Release | null>;
@@ -45,9 +55,17 @@ export const useUpdates = create<UpdatesState>()(
     (set, get) => ({
       lastCheck: 0,
       checkOnLaunch: true,
+      checkInterval: 'launch',
+      dismissedVersion: null,
       prereleases: false,
       status: { phase: 'idle' },
       setCheckOnLaunch: (checkOnLaunch) => set({ checkOnLaunch }),
+      setCheckInterval: (checkInterval) => set({ checkInterval }),
+      dismiss: (dismissedVersion) => set({ dismissedVersion }),
+      isDismissed: (release) => {
+        const dismissed = get().dismissedVersion;
+        return !!dismissed && !isNewer(release.version, dismissed);
+      },
       setPrereleases: (prereleases) => {
         const { phase } = get().status;
         // What the last check found may no longer apply; a download under way carries on.
@@ -105,7 +123,13 @@ export const useUpdates = create<UpdatesState>()(
     {
       name: 'updates',
       storage: jsonFileStorage,
-      partialize: (s) => ({ lastCheck: s.lastCheck, checkOnLaunch: s.checkOnLaunch, prereleases: s.prereleases }),
+      partialize: (s) => ({
+        lastCheck: s.lastCheck,
+        checkOnLaunch: s.checkOnLaunch,
+        checkInterval: s.checkInterval,
+        dismissedVersion: s.dismissedVersion,
+        prereleases: s.prereleases,
+      }),
     }
   )
 );

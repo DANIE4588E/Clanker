@@ -82,6 +82,7 @@ export default function RootLayout() {
               <Stack.Screen name="settings/workspace" options={{ title: 'Workspace files' }} />
               <Stack.Screen name="settings/tools" options={{ title: 'Files & code' }} />
               <Stack.Screen name="settings/context" options={{ title: 'Auto-compression' }} />
+              <Stack.Screen name="settings/task-model" options={{ title: '' }} />
               <Stack.Screen name="settings/search" options={{ title: 'Web access' }} />
               <Stack.Screen name="settings/memory" options={{ title: 'Memory' }} />
               <Stack.Screen name="settings/files" options={{ title: 'Files' }} />

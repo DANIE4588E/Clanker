@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { currentVersion, updatesSupported, type Release } from '@/lib/updates';
 import { useUpdates } from '@/store/updates';
 import { confirm, notify } from './Dialogs';
@@ -14,15 +15,21 @@ function notesPreview(notes: string) {
   return text.length <= NOTES_MAX ? text : `${text.slice(0, NOTES_MAX).trimEnd()} …`;
 }
 
+/** Asks whether to update now, or to skip this version until a newer one comes out. */
 export function offerUpdate(release: Release) {
   const size = release.apkSize ? `The download is ${(release.apkSize / 1e6).toFixed(0)} MB.` : '';
   confirm({
     title: `Clanker ${release.version} is available`,
     message: [notesPreview(release.notes), size].filter(Boolean).join('\n\n'),
-    confirmLabel: 'Download',
+    confirmLabel: 'Update',
+    cancelLabel: 'Dismiss',
+    onCancel: () => useUpdates.getState().dismiss(release.version),
     onConfirm: () => useUpdates.getState().download(release),
   });
 }
+
+// The startup check runs once per run of the app, however often it comes back to the foreground.
+let checkedThisLaunch = false;
 
 /** Asks GitHub now, offering the update if there is one. */
 export async function checkForUpdates() {
@@ -83,27 +90,41 @@ export function UpdateRow() {
   }
 }
 
+/** Checks if the automatic check is on and due, offering any update the user hasn't dismissed. */
+function autoCheck() {
+  const { checkOnLaunch, checkInterval, lastCheck, status } = useUpdates.getState();
+  if (!checkOnLaunch) return;
+  if (checkInterval === 'daily' ? Date.now() - lastCheck < DAY : checkedThisLaunch) return;
+  // Never interrupt a check, download or install already under way.
+  if (status.phase === 'checking' || status.phase === 'downloading' || status.phase === 'ready') return;
+  checkedThisLaunch = true;
+  useUpdates
+    .getState()
+    .check()
+    .then(
+      (release) => release && !useUpdates.getState().isDismissed(release) && offerUpdate(release),
+      // Offline, say; the Settings row shouldn't show an error nobody asked about.
+      () => useUpdates.setState({ status: { phase: 'idle' } })
+    );
+}
+
 /**
- * Mount once, at the root: checks on launch unless turned off, at most once a day, and only
- * speaks up when there's an update.
+ * Mount once, at the root: checks on startup or once a day, as set, unless turned off, and only
+ * speaks up when there's an update the user hasn't dismissed.
  */
 export function UpdateCheck() {
   useEffect(() => {
     // Development builds carry whatever version app.json has, so every release would look newer.
     if (!updatesSupported || __DEV__) return;
-    const { checkOnLaunch, lastCheck } = useUpdates.getState();
-    if (!checkOnLaunch || Date.now() - lastCheck < DAY) return;
-    const timer = setTimeout(() => {
-      useUpdates
-        .getState()
-        .check()
-        .then(
-          (release) => release && offerUpdate(release),
-          // Offline at launch, say; the Settings row shouldn't show an error nobody asked about.
-          () => useUpdates.setState({ status: { phase: 'idle' } })
-        );
-    }, LAUNCH_DELAY);
-    return () => clearTimeout(timer);
+    const timer = setTimeout(autoCheck, LAUNCH_DELAY);
+    // Coming back to the app can make the daily check due.
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') autoCheck();
+    });
+    return () => {
+      clearTimeout(timer);
+      subscription.remove();
+    };
   }, []);
   return null;
 }

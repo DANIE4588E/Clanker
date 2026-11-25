@@ -1,5 +1,5 @@
 import { interruptContent, messageText, useChats, type QueuedMessage } from '@/store/chats';
-import { resolveBudget, resolveEffort, useSettings } from '@/store/settings';
+import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
 import { deleteAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
 import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
@@ -502,7 +502,13 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string }) {
   if (!controller.signal.aborted && !controllers.has(id)) void notifyReplyFinished(id, replyId);
 }
 
-async function generateTitle(id: string, endpoint: Endpoint, apiKey: string | undefined, model: string) {
+async function generateTitle(id: string, chatEndpoint: Endpoint, chatApiKey: string | undefined, chatModel: string) {
+  // A model picked for titles in Settings wins over the chat's own, while it still exists.
+  const { endpoints, titleModel } = useSettings.getState();
+  const picked = resolveTaskModel(endpoints, titleModel);
+  const endpoint = picked?.endpoint ?? chatEndpoint;
+  const model = picked?.model ?? chatModel;
+  const apiKey = picked && picked.endpoint.id !== chatEndpoint.id ? (await apiKeys.get(endpoint.id)) ?? undefined : chatApiKey;
   const conversation = useChats.getState().conversations[id];
   const firstUser = conversation?.messages.find((m) => m.role === 'user');
   if (!firstUser) return;

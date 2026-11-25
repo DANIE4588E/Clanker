@@ -18,6 +18,10 @@ type Confirm = {
   destructive?: boolean;
   /** Only the confirm button, for a notice. */
   noCancel?: boolean;
+  /** In place of "Cancel"; with onCancel, a second choice rather than a way out. */
+  cancelLabel?: string;
+  /** Called by the cancel button only; tapping outside or going back still just closes. */
+  onCancel?: () => void;
   onConfirm: () => void;
 };
 
@@ -73,7 +77,12 @@ export function DialogHost() {
               {!!dialog.message && <Text style={[styles.message, { color: colors.textSecondary }]}>{dialog.message}</Text>}
               {dialog.kind === 'confirm' && (
                 <View style={styles.buttons}>
-                  {!dialog.noCancel && <Button label="Cancel" onPress={close} />}
+                  {!dialog.noCancel && (
+                    <Button
+                      label={dialog.cancelLabel ?? 'Cancel'}
+                      onPress={dialog.onCancel ? () => act(dialog.onCancel!) : close}
+                    />
+                  )}
                   <Button
                     label={dialog.confirmLabel}
                     variant={dialog.destructive ? 'danger' : 'primary'}

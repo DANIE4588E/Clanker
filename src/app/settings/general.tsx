@@ -2,9 +2,10 @@ import { router } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { Row, Section, ToggleRow } from '@/components/Form';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { friendlyModelName } from '@/lib/modelNames';
 import { useTheme } from '@/lib/theme';
 import { useMemory } from '@/store/memory';
-import { useSettings, type FollowUpMode } from '@/store/settings';
+import { resolveTaskModel, useSettings, type FollowUpMode } from '@/store/settings';
 
 const FOLLOW_UPS: { value: FollowUpMode; label: string; icon: 'list' | 'corner-down-right' }[] = [
   { value: 'queue', label: 'Queue', icon: 'list' },
@@ -25,6 +26,11 @@ export default function GeneralScreen() {
   const followUp = useSettings((s) => s.followUp);
   const setFollowUp = useSettings((s) => s.setFollowUp);
   const compression = useSettings((s) => s.compression);
+  const friendly = useSettings((s) => s.friendlyModelNames);
+  const titleModel = useSettings((s) => resolveTaskModel(s.endpoints, s.titleModel)?.model);
+  const suggestionModel = useSettings((s) => resolveTaskModel(s.endpoints, s.suggestionModel)?.model);
+  const modelName = (model: string | undefined, fallback: string) =>
+    model ? `Uses ${friendly ? friendlyModelName(model) || model : model}` : fallback;
   const memoryCount = useMemory((s) => s.memories.filter((m) => !m.projectId).length);
 
   return (
@@ -41,16 +47,18 @@ export default function GeneralScreen() {
         <ToggleRow
           icon="type"
           title="Generate titles"
-          detail="Ask the model to name each chat after its first reply"
+          detail={modelName(titleModel, "Name each chat with the chat's model")}
           value={titleGeneration}
           onValueChange={setTitleGeneration}
+          onPress={() => router.push({ pathname: '/settings/task-model', params: { task: 'title' } })}
         />
         <ToggleRow
           icon="message-circle"
           title="Suggested prompts"
-          detail="Show ideas from recent chats, generated at most once every 24 hours"
+          detail={modelName(suggestionModel, 'Ideas from recent chats, by the selected model')}
           value={suggestions}
           onValueChange={setSuggestions}
+          onPress={() => router.push({ pathname: '/settings/task-model', params: { task: 'suggestions' } })}
         />
         <ToggleRow
           icon="archive"
