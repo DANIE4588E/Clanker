@@ -27,6 +27,9 @@ import { QueuedMessages } from './QueuedMessages';
 // screen bottom, with a fade of VEIL_FADE above it, so text behind the panel drops out.
 const VEIL_CAP = 26;
 const VEIL_FADE = 120;
+// Room under the slider for its glow (a 22px blur + 3px spread) over the keyboard, where the
+// veil below the panel would otherwise paint across the glow's lower half.
+const GLOW_ROOM = 28;
 const EFFORT_FADE = { duration: 160 };
 /** How far the composer's fade reaches past it into the content above. */
 export const COMPOSER_FADE = 28;
@@ -265,7 +268,7 @@ export function ComposerDock({
                 pointerEvents="box-none"
                 style={[
                   styles.panel,
-                  { backgroundColor: colors.background, paddingBottom: keyboardVisible ? 0 : panelBottom },
+                  { backgroundColor: colors.background, paddingBottom: keyboardVisible ? GLOW_ROOM : panelBottom },
                 ]}
               >
                 <EffortSlider
