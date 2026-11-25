@@ -3,8 +3,8 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { memo, useMemo, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { attachmentUri } from '@/lib/attachments';
 import type { ContentPart, FilePart, ImagePart, ToolPart } from '@/lib/providers';
 import { splitQuotes } from '@/lib/quotes';
@@ -12,6 +12,7 @@ import { sitesOf, sourcesOf } from '@/lib/sources';
 import { formatStats } from '@/lib/stats';
 import { useTheme } from '@/lib/theme';
 import { messageText, type Message } from '@/store/chats';
+import { describeCall } from '@/lib/tools/describe';
 import { useSettings } from '@/store/settings';
 import { BrandIcon } from './BrandIcon';
 import { FileIcon } from './FileIcon';
@@ -23,7 +24,7 @@ import { NestedScroll } from './NestedScroll';
 import { QuestionCard } from './QuestionCard';
 import { SiteChips, SourcesButton } from './Sources';
 import { ThinkingIndicator } from './ThinkingIndicator';
-import { ToolCall } from './ToolCall';
+import { ToolCall, toolIcon } from './ToolCall';
 import { filesOf, TurnFiles } from './TurnFiles';
 
 type Props = {
@@ -101,12 +102,13 @@ const ANSWER_CHARS = 240;
 
 /**
  * Splits a reply that used tools into the work (thoughts, tool calls and notes, up to the last
- * thought or call) and the answer after it. Replies without tool calls aren't split.
+ * thought or call) and the answer after it. Replies without tool calls aren't split, unless
+ * `thoughts` says a reply that only thought counts as work too.
  */
-function splitWork(segments: Segment[]) {
+function splitWork(segments: Segment[], thoughts: boolean) {
   const end = segments.findLastIndex((s) => s.kind !== 'text');
   const work = segments.slice(0, end + 1);
-  if (!work.some((s) => s.kind === 'tool')) return null;
+  if (!work.some((s) => s.kind === 'tool' || (thoughts && s.kind === 'thought'))) return null;
   const answer = segments.slice(end + 1) as Extract<Segment, { kind: 'text' }>[];
   return { work, answer, text: answer.map((s) => s.text).join('').trim(), at: answer[0]?.at };
 }
@@ -116,32 +118,96 @@ function duration(ms: number) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-/** The work behind an answer under a "Worked for Ns" header, open while it happens and folded once the answer comes. */
+/** Milliseconds since `since`, ticking every second while `live`. */
+function useElapsed(since: number, live: boolean) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [live]);
+  return Math.max(0, now - since);
+}
+
+/** The end of a stretch of text on one line, so the newest words stay in view as it streams. */
+const tail = (text: string) => text.replace(/\s+/g, ' ').trim().slice(-300);
+
+/**
+ * What the model is doing right now, in one line: the running call, the end of its streaming
+ * thoughts or note, or "Thinking…" between steps. Tapping it opens the steps.
+ */
+function CurrentStep({ seg, onPress }: { seg: Segment | null; onPress: () => void }) {
+  const { colors } = useTheme();
+  let icon: keyof typeof Feather.glyphMap = 'activity';
+  let text = 'Thinking…';
+  let running = false;
+  if (seg?.kind === 'tool') {
+    icon = toolIcon(seg.part.name);
+    text = describeCall(seg.part.name, seg.part.input);
+    running = seg.part.status === 'writing' || seg.part.status === 'running';
+  } else if (seg) {
+    if (seg.kind === 'text') icon = 'edit-3';
+    text = tail(seg.text) || text;
+  }
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={4}
+      accessibilityRole="button"
+      accessibilityLabel={`${text}, show steps`}
+      style={({ pressed }) => [styles.step, pressed && { opacity: 0.6 }]}
+    >
+      <Feather name={icon} size={14} color={colors.textTertiary} />
+      <Text
+        numberOfLines={1}
+        // Streaming text keeps its newest words; a call keeps the start of its description.
+        ellipsizeMode={seg && seg.kind !== 'tool' ? 'head' : 'tail'}
+        style={[styles.stepText, { color: colors.textTertiary }]}
+      >
+        {text}
+      </Text>
+      {running && <ActivityIndicator size="small" color={colors.textTertiary} style={styles.stepSpinner} />}
+    </Pressable>
+  );
+}
+
+/**
+ * The work behind an answer under a "Working for Ns" header that becomes "Worked for Ns" once the
+ * answer comes. Folded while under way, it still shows the model's notes, then `step` (the current
+ * step) in place of the thoughts and calls.
+ */
 function Work({
   segments,
-  folded,
-  live,
+  open,
+  onToggle,
+  working,
+  since,
   ms,
+  step,
   render,
   content,
 }: {
   segments: Segment[];
-  /** Whether the work is done and the answer is on its way, which folds it unless the user opened it. */
-  folded: boolean;
-  live: boolean;
+  open: boolean;
+  onToggle: () => void;
+  /** Whether the work is still under way: the reply streams and no answer has come yet. */
+  working: boolean;
+  /** When the reply started, for the running time. */
+  since: number;
+  /** How long the work took, once done. */
   ms: number;
+  step: ReactNode;
   render: (seg: Segment, i: number) => ReactNode;
   content: ContentPart[];
 }) {
   const { colors } = useTheme();
-  const [openOverride, setOpenOverride] = useState<boolean | null>(null);
-  const open = openOverride ?? !folded;
+  const elapsed = useElapsed(since, working);
   const { sites, searched } = useMemo(() => sitesOf(content), [content]);
-  const label = live && !folded ? 'Working…' : `Worked for ${duration(ms)}`;
+  const label = working ? `Working for ${duration(elapsed)}` : `Worked for ${duration(ms)}`;
   return (
     <>
       <Pressable
-        onPress={() => setOpenOverride(!open)}
+        onPress={onToggle}
         hitSlop={8}
         accessibilityRole="button"
         accessibilityLabel={`${label}, ${open ? 'hide' : 'show'} steps`}
@@ -159,7 +225,15 @@ function Work({
           call shows after the steps and joins them when the call lands, which would push the
           sites down on every round. */}
       <SiteChips sites={sites} searched={searched} />
-      {open && segments.map(render)}
+      {open ? (
+        segments.map(render)
+      ) : (
+        <>
+          {/* Folded while under way, the model's notes between steps still show; only thoughts and calls fold. */}
+          {working && segments.map((seg, i) => seg.kind === 'text' && render(seg, i))}
+          {step}
+        </>
+      )}
     </>
   );
 }
@@ -199,12 +273,15 @@ const ThoughtChunk = memo(function ThoughtChunk({ text, color }: { text: string;
   );
 });
 
-/** One stretch of the model's thinking: a "Thought for Ns" pill that shows or hides the text. */
-function Thoughts({ text, ms, live }: { text: string; ms?: number; live: boolean }) {
+/**
+ * One stretch of the model's thinking: a "Thought for Ns" pill that shows or hides the text.
+ * Folded while it streams, the pill is followed by the newest of it on one line.
+ */
+function Thoughts({ text, ms, live, keepOpen }: { text: string; ms?: number; live: boolean; keepOpen: boolean }) {
   const { colors } = useTheme();
-  // Expanded while it streams; a tap pins the choice either way.
+  // Expanded while it streams, or for good when `keepOpen`; a tap pins the choice either way.
   const [openOverride, setOpenOverride] = useState<boolean | null>(null);
-  const open = openOverride ?? live;
+  const open = openOverride ?? (live || keepOpen);
   const chunks = useMemo(() => (open ? splitThoughtChunks(text) : []), [open, text]);
   return (
     <>
@@ -225,6 +302,7 @@ function Thoughts({ text, ms, live }: { text: string; ms?: number; live: boolean
           </SelectionArea>
         </NestedScroll>
       )}
+      {!open && live && <CurrentStep seg={{ kind: 'thought', text }} onPress={() => setOpenOverride(true)} />}
     </>
   );
 }
@@ -235,6 +313,9 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
   const showSpeed = useSettings((s) => s.decodeSpeed);
   const showCache = useSettings((s) => s.cacheHits);
   const friendly = useSettings((s) => s.friendlyModelNames);
+  const detail = useSettings((s) => s.chatDetail);
+  // The user's own choice to show or hide the work, kept over what the detail level would do.
+  const [workOverride, setWorkOverride] = useState<boolean | null>(null);
   const stats = formatStats(message.stats, { speed: showSpeed, cache: showCache });
   const text = messageText(message);
   const images = message.content.filter((p): p is ImagePart => p.type === 'image');
@@ -287,8 +368,18 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
     (!lastSeg ||
       (lastSeg.kind === 'tool' && (lastSeg.part.status === 'done' || lastSeg.part.status === 'error')) ||
       (lastSeg.kind === 'thought' && lastSeg.ms != null));
-  const split = splitWork(segments);
+  // Compact and normal fold a reply's thinking away with its other work.
+  const brief = detail === 'compact' || detail === 'normal';
+  const split = splitWork(segments, brief);
   const answered = !!split?.text && (!streaming || split.text.length > ANSWER_CHARS);
+  const working = streaming && !answered;
+  // Compact and normal start folded; detailed shows the work until the answer comes; verbose keeps it.
+  const workOpen = workOverride ?? (detail === 'verbose' || (detail === 'detailed' && !answered));
+  // Folded work that's still under way shows its current step in one line, except when compact.
+  const workStep =
+    split && working && !workOpen && detail !== 'compact' ? (
+      <CurrentStep seg={waiting ? null : split.work[split.work.length - 1]} onPress={() => setWorkOverride(true)} />
+    ) : null;
   // From the start of the reply to the start of its answer; replies saved without that time add up their steps.
   const workedMs =
     split && answered && split.at
@@ -308,7 +399,13 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
     seg.kind === 'tool' ? (
       !asking.includes(seg.part) && <ToolCall key={seg.part.id} part={seg.part} />
     ) : seg.kind === 'thought' ? (
-      <Thoughts key={`r${i}`} text={seg.text} ms={seg.ms} live={streaming && seg === lastSeg && seg.ms == null} />
+      <Thoughts
+        key={`r${i}`}
+        text={seg.text}
+        ms={seg.ms}
+        live={streaming && seg === lastSeg && seg.ms == null}
+        keepOpen={detail === 'verbose'}
+      />
     ) : (
       !!seg.text.trim() && <Markdown key={`t${i}`} value={seg.text} live={streaming && seg === lastSeg} />
     );
@@ -319,9 +416,12 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
         <>
           <Work
             segments={split.work}
-            folded={answered}
-            live={streaming}
+            open={workOpen}
+            onToggle={() => setWorkOverride(!workOpen)}
+            working={working}
+            since={message.createdAt}
             ms={workedMs}
+            step={workStep}
             render={render}
             content={message.content}
           />
@@ -333,7 +433,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
       {asking.map((part) => (
         <QuestionCard key={part.id} part={part} />
       ))}
-      {waiting && <ThinkingIndicator thinking expanded={false} toggleable={false} onToggle={() => {}} />}
+      {/* Folded work already says the model is at it, in its header and current step. */}
+      {waiting && !(split && !workOpen) && (
+        <ThinkingIndicator thinking expanded={false} toggleable={false} onToggle={() => {}} />
+      )}
       {!!made.length && <TurnFiles files={made} />}
       {!onRegenerate && <RemoteReply chatId={conversationId} reply={message.remote} reconnect={!!message.error} />}
       {message.error && message.status !== 'error' && <Text style={{ color: colors.textSecondary }}>{message.error}</Text>}
@@ -455,6 +558,9 @@ const styles = StyleSheet.create({
   memory: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', maxWidth: '100%', paddingVertical: 4 },
   memoryText: { fontSize: 13, flexShrink: 1 },
   workHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, marginLeft: 2, alignSelf: 'flex-start' },
+  step: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4, marginLeft: 2, maxWidth: '100%' },
+  stepText: { fontSize: 14, flexShrink: 1 },
+  stepSpinner: { transform: [{ scale: 0.7 }], marginVertical: -4 },
   workLabel: { fontSize: 15, fontWeight: '500' },
   error: { borderWidth: 1, borderRadius: 12, padding: 12, gap: 10, marginTop: 4 },
   reasonRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },

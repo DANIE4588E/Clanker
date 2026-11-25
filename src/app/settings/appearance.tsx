@@ -2,13 +2,27 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { Section, ToggleRow } from '@/components/Form';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { useTheme } from '@/lib/theme';
-import { useSettings, type ThemePreference } from '@/store/settings';
+import { useSettings, type ChatDetail, type ThemePreference } from '@/store/settings';
 
 const THEMES: { value: ThemePreference; label: string; icon: 'smartphone' | 'sun' | 'moon' }[] = [
   { value: 'system', label: 'System', icon: 'smartphone' },
   { value: 'light', label: 'Light', icon: 'sun' },
   { value: 'dark', label: 'Dark', icon: 'moon' },
 ];
+
+const DETAILS: { value: ChatDetail; label: string }[] = [
+  { value: 'compact', label: 'Compact' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'detailed', label: 'Detailed' },
+  { value: 'verbose', label: 'Verbose' },
+];
+
+const DETAIL_FOOTERS: Record<ChatDetail, string> = {
+  compact: 'While the model works, only "Working for…" shows. Tap it to see the steps.',
+  normal: 'While the model works, "Working for…" shows with the step it is on. Tap it to see every step.',
+  detailed: 'Every step shows while the model works, and folds away once the answer comes.',
+  verbose: 'Every step and thought shows, and stays open until you fold it.',
+};
 
 /** Settings → Appearance: theme, model names and what shows alongside replies. */
 export default function AppearanceScreen() {
@@ -23,6 +37,8 @@ export default function AppearanceScreen() {
   const setDecodeSpeed = useSettings((s) => s.setDecodeSpeed);
   const cacheHits = useSettings((s) => s.cacheHits);
   const setCacheHits = useSettings((s) => s.setCacheHits);
+  const chatDetail = useSettings((s) => s.chatDetail);
+  const setChatDetail = useSettings((s) => s.setChatDetail);
 
   return (
     <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={styles.content}>
@@ -40,6 +56,12 @@ export default function AppearanceScreen() {
           value={friendly}
           onValueChange={setFriendly}
         />
+      </Section>
+
+      <Section title="Reply detail" footer={DETAIL_FOOTERS[chatDetail]}>
+        <View style={styles.segment}>
+          <SegmentedControl options={DETAILS} value={chatDetail} onChange={setChatDetail} />
+        </View>
       </Section>
 
       <Section title="Chat details">

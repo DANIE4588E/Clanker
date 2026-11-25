@@ -20,6 +20,12 @@ export type FollowUpMode = 'queue' | 'steer';
 /** When prompt suggestions are written afresh: once a day, each time the app starts, or for every new chat. */
 export type SuggestionRefresh = 'daily' | 'launch' | 'chat';
 
+/**
+ * How much of a reply's work shows: only how long it has run (compact), that plus the current step
+ * (normal), every step until the answer comes (detailed), or every step until the user folds it (verbose).
+ */
+export type ChatDetail = 'compact' | 'normal' | 'detailed' | 'verbose';
+
 export type SearchProvider = 'firecrawl' | 'duckduckgo' | 'exa' | 'brave' | 'tavily' | 'searxng';
 
 /** Where web_search sends queries. Keys live in SecureStore under `search-<provider>`. */
@@ -72,6 +78,7 @@ interface SettingsState {
   suggestionRefresh: SuggestionRefresh;
   /** Whether providers and models show as brand marks with tidied names instead of raw ids. */
   friendlyModelNames: boolean;
+  chatDetail: ChatDetail;
   followUp: FollowUpMode;
   upsertEndpoint: (endpoint: Endpoint) => void;
   removeEndpoint: (id: string) => void;
@@ -96,6 +103,7 @@ interface SettingsState {
   setSuggestionModel: (ref: ModelRef | null) => void;
   setSuggestionRefresh: (when: SuggestionRefresh) => void;
   setFriendlyModelNames: (on: boolean) => void;
+  setChatDetail: (detail: ChatDetail) => void;
   setFollowUp: (mode: FollowUpMode) => void;
 }
 
@@ -124,6 +132,7 @@ export const useSettings = create<SettingsState>()(
       suggestionModel: null,
       suggestionRefresh: 'launch',
       friendlyModelNames: true,
+      chatDetail: 'detailed',
       followUp: 'queue',
       upsertEndpoint: (endpoint) => {
         const exists = get().endpoints.some((e) => e.id === endpoint.id);
@@ -180,6 +189,7 @@ export const useSettings = create<SettingsState>()(
       setSuggestionModel: (suggestionModel) => set({ suggestionModel }),
       setSuggestionRefresh: (suggestionRefresh) => set({ suggestionRefresh }),
       setFriendlyModelNames: (friendlyModelNames) => set({ friendlyModelNames }),
+      setChatDetail: (chatDetail) => set({ chatDetail }),
       setFollowUp: (followUp) => set({ followUp }),
     }),
     {

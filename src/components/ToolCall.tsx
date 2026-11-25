@@ -36,6 +36,8 @@ const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   context_status: 'bar-chart-2',
 };
 
+export const toolIcon = (name: string): keyof typeof Feather.glyphMap => ICONS[name] ?? 'tool';
+
 const JOB_LABELS = {
   running: 'in background',
   done: 'background · done',
@@ -170,7 +172,7 @@ function ToolCallInner({ part }: { part: ToolPart }) {
         accessibilityLabel={`${label}, ${writing ? 'writing' : running ? 'running' : failed ? 'failed' : 'done'}`}
         style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
       >
-        <Feather name={ICONS[part.name] ?? 'tool'} size={14} color={failed ? colors.danger : colors.textSecondary} />
+        <Feather name={toolIcon(part.name)} size={14} color={failed ? colors.danger : colors.textSecondary} />
         <Text numberOfLines={1} style={[styles.label, { color: failed ? colors.danger : colors.textSecondary }]}>
           {label}
         </Text>
