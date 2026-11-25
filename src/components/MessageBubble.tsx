@@ -23,6 +23,7 @@ import { Markdown } from './Markdown';
 import { NestedScroll } from './NestedScroll';
 import { QuestionCard } from './QuestionCard';
 import { SiteChips, SourcesButton } from './Sources';
+import { useFadeText } from './StreamFade';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { ToolCall, toolIcon } from './ToolCall';
 import { filesOf, TurnFiles } from './TurnFiles';
@@ -265,10 +266,21 @@ function splitThoughtChunks(text: string): string[] {
   return chunks;
 }
 
-const ThoughtChunk = memo(function ThoughtChunk({ text, color }: { text: string; color: string }) {
+const ThoughtChunk = memo(function ThoughtChunk({
+  text,
+  color,
+  live,
+  fadeInitial,
+}: {
+  text: string;
+  color: string;
+  live: boolean;
+  fadeInitial: boolean;
+}) {
+  const content = useFadeText(text, live, color, { fadeInitial });
   return (
     <Text selectable={!areasSelect} style={[styles.thoughtsText, { color }]}>
-      {text}
+      {content}
     </Text>
   );
 });
@@ -297,7 +309,13 @@ function Thoughts({ text, ms, live, keepOpen }: { text: string; ms?: number; liv
         <NestedScroll style={styles.thoughts} follow={live}>
           <SelectionArea style={[styles.thoughtsInner, { borderLeftColor: colors.border }]}>
             {chunks.map((chunk, i) => (
-              <ThoughtChunk key={i} text={chunk} color={colors.textSecondary} />
+              <ThoughtChunk
+                key={i}
+                text={chunk}
+                color={colors.textSecondary}
+                live={live && i === chunks.length - 1}
+                fadeInitial={i === 0}
+              />
             ))}
           </SelectionArea>
         </NestedScroll>

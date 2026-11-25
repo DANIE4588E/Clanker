@@ -12,6 +12,7 @@ import { ChatImage, ImageCards, parseImages } from './ImageCards';
 import { MarkdownTable } from './MarkdownTable';
 import { InlineMath, MathBlock } from './MathView';
 import { SelectionArea, useSelectable } from './SelectionArea';
+import { useFadeNodes } from './StreamFade';
 import { SKIP_SELECTION } from '../../modules/clanker-selection';
 
 /** Shown in place of a chart or image block whose JSON is still streaming in. */
@@ -227,11 +228,12 @@ const MarkdownBlock = memo(function MarkdownBlock({ value, live }: { value: stri
   // useMarkdown parses during this render whenever the text changed.
   renderer.reset();
   const elements = useMarkdown(value, { colorScheme: scheme, styles, theme, renderer });
+  const rendered = useFadeNodes(elements, live, colors.text);
   return (
     <>
       {/* Blocks are keyed by position: the renderer keys a block after its children, so the block
           still streaming in would otherwise get a new key, and remount, with every inline token. */}
-      {elements.map((element, i) =>
+      {rendered.map((element, i) =>
         isValidElement(element) ? cloneElement(element, { key: i }) : <Fragment key={i}>{element}</Fragment>
       )}
     </>

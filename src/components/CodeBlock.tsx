@@ -8,6 +8,7 @@ import { fonts, useTheme } from '@/lib/theme';
 import { SKIP_SELECTION } from '../../modules/clanker-selection';
 import { HorizontalScroll } from './HorizontalScroll';
 import { useSelectable } from './SelectionArea';
+import { useFadeNodes } from './StreamFade';
 
 const lowlight = createLowlight(common);
 
@@ -165,6 +166,12 @@ function CodeBlockInner({
     const tree = settled ? highlight(settled, lang) : null;
     return tree ? renderNodes(tree.children as ElementContent[], palette) : settled;
   }, [settled, lang, palette]);
+  const trailing = !live ? text.slice(settled.length) : '';
+  const bodyNodes = useMemo(
+    () => (live ? [tail(text)] : [highlighted, trailing]),
+    [live, text, highlighted, trailing]
+  );
+  const fadedBody = useFadeNodes(bodyNodes, !live && streaming, palette.base, { text });
 
   const copy = async () => {
     await Clipboard.setStringAsync(text);
@@ -183,8 +190,7 @@ function CodeBlockInner({
       </View>
       <HorizontalScroll contentContainerStyle={styles.body}>
         <Text selectable={selectable} style={[styles.code, { color: palette.base }]}>
-          {live ? tail(text) : highlighted}
-          {!live && text.slice(settled.length)}
+          {fadedBody}
         </Text>
       </HorizontalScroll>
     </View>

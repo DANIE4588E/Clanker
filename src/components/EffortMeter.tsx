@@ -1,4 +1,6 @@
-import { Circle, Line, Path, Svg } from 'react-native-svg';
+import { useId } from 'react';
+import { Circle, Defs, Line, LinearGradient, Path, Stop, Svg } from 'react-native-svg';
+import { EFFORT_GRADIENTS, effortTier, type EffortTier } from '@/lib/effortTheme';
 import { useTheme } from '@/lib/theme';
 
 // Gauge for the composer's effort button: an arc that fills clockwise in proportion to the
@@ -30,13 +32,31 @@ function arcPath(from: number, to: number) {
 
 export function EffortMeter({ levels, level, size = SIZE }: { levels: string[]; level: string; size?: number }) {
   const { colors } = useTheme();
+  const id = `meter${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const index = Math.max(0, levels.indexOf(level));
   // Segment per level: the lowest active level is a third full on a three-level model,
   // the highest always reaches the end. Off is empty at any position in the range.
   const frac = level === 'off' || level === 'none' ? 0 : (index + 1) / levels.length;
   const needle = point(START + SWEEP * frac, NEEDLE);
+  // Matches the effort slider's fill: solid accent for everyday levels, then the same
+  // blue-to-violet gradients at high, xhigh and max.
+  const tier = effortTier(levels, level);
+  // Max's darkest indigo all but vanishes on a dark composer at this size, so the gauge
+  // keeps only the brighter end of each gradient.
+  const stops = tier > 0 ? EFFORT_GRADIENTS[tier as Exclude<EffortTier, 0>].slice(-3) : null;
   return (
     <Svg width={size} height={size} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+      {stops && (
+        <Defs>
+          {/* Fixed to the gauge rather than the arc's own box, so a short arc shows the
+              gradient's start instead of squeezing all of it. */}
+          <LinearGradient id={id} gradientUnits="userSpaceOnUse" x1={C - R} y1={C} x2={C + R} y2={C}>
+            {stops.map((c, i) => (
+              <Stop key={i} offset={i / (stops.length - 1)} stopColor={c} />
+            ))}
+          </LinearGradient>
+        </Defs>
+      )}
       <Path
         d={arcPath(START, START + SWEEP)}
         fill="none"
@@ -45,7 +65,13 @@ export function EffortMeter({ levels, level, size = SIZE }: { levels: string[]; 
         strokeLinecap="round"
       />
       {frac > 0 && (
-        <Path d={arcPath(START, START + SWEEP * frac)} fill="none" stroke={colors.accent} strokeWidth={STROKE} strokeLinecap="round" />
+        <Path
+          d={arcPath(START, START + SWEEP * frac)}
+          fill="none"
+          stroke={stops ? `url(#${id})` : colors.accent}
+          strokeWidth={STROKE}
+          strokeLinecap="round"
+        />
       )}
       <Line
         x1={C}
