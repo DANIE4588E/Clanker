@@ -132,7 +132,7 @@ export const useSettings = create<SettingsState>()(
       suggestionModel: null,
       suggestionRefresh: 'launch',
       friendlyModelNames: true,
-      chatDetail: 'detailed',
+      chatDetail: 'normal',
       followUp: 'queue',
       upsertEndpoint: (endpoint) => {
         const exists = get().endpoints.some((e) => e.id === endpoint.id);
