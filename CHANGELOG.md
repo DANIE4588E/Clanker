@@ -1,3 +1,25 @@
+# Clanker 1.3.0-beta.4
+
+## Subscription usage at a glance
+- The usage badge left the chat header — a **5-hour usage bar** now sits beside the attach button while the composer is expanded; tap it for a card with every limit, its reset times and a refresh button.
+- The model picker shows each subscription's **plan badge** and a refresh button beside its name, **compact usage bars** instead of usage chips, and account chips carrying their 5-hour usage.
+- The context meter moved left of the effort gauge, and toolbar icons are evenly spaced.
+
+## Pick a model for background tasks
+- **Generate titles** and **Suggested prompts** open their own screen in Settings where you can **assign a dedicated model** to each — a small, fast model is usually plenty — instead of always borrowing the chat's model.
+
+## Reply detail
+- A new **Reply detail** control in Settings → Appearance sets how much of the model's work shows: **Compact** — just "Working for…", tap for the steps; **Normal** — that plus the current step; **Detailed** — every step, folded away once the answer comes; **Verbose** — every step and thought, open until you fold it. Defaults to Normal.
+
+## Settings, reorganized
+- Settings is now one row per category — General, Appearance, Agent, Providers, Updates — each opening its own screen, with the row telling you what's currently set (theme, tools on, connected providers, update status).
+
+## Smoother streaming and a livelier effort slider
+- Replies **fade in token by token**, and the chat **glides upward as lines wrap** instead of jumping a frame at a time while streaming.
+- The effort slider **charges up** past the everyday levels: past high, the fill turns from blue into a starry violet that streams and glows as you drag; the effort gauge matches its colours.
+
+---
+
 # Clanker 1.3.0-beta.3
 
 ## Fixes
