@@ -6,13 +6,15 @@ import { ActivityIndicator, Alert, Dimensions, Keyboard, Pressable, ScrollView, 
 import Animated, { Easing, interpolate, useAnimatedStyle, withTiming, type SharedValue } from 'react-native-reanimated';
 import { AttachmentMenu, type AttachAction } from '@/components/AttachmentMenu';
 import { attachmentUri, deleteAttachment, pickFiles, pickImages } from '@/lib/attachments';
-import { ContextMeter, ContextPopover } from '@/components/ContextUsage';
-import { EffortMeter } from '@/components/EffortMeter';
+import { CONTEXT_METER_WIDTH, ContextMeter, ContextPopover } from '@/components/ContextUsage';
+import { EFFORT_METER_EXTENT, EffortMeter } from '@/components/EffortMeter';
 import { FileIcon } from '@/components/FileIcon';
 import { measureInOverlay } from '@/components/OverlayHost';
+import { QUOTA_METER_WIDTH, QuotaMeter, QuotaPopover, quotaMeterLabel } from '@/components/QuotaUsage';
 import type { AttachmentPart, FilePart, ImagePart } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import type { ContextUsage } from '@/lib/usage';
+import type { SubscriptionQuota } from '@/lib/useSubscriptionQuota';
 
 // The composer is a one-line pill while the keyboard is down and a two-row box (text above,
 // toolbar below) while the keyboard is up. One progress value drives every dimension between
@@ -25,8 +27,19 @@ const COLLAPSED = { margin: 36, padLeft: TOOLBAR_PAD + BUTTON + 2, padRight: TOO
 const EXPANDED = { margin: 12, padLeft: 16, padRight: 16, padBottom: ROW - 6 };
 const TWEEN = { duration: 280, easing: Easing.bezier(0.2, 0, 0, 1) };
 const TOOLBAR_GAP = 4;
-// Tap target around the context meter; it only takes room in the toolbar while expanded.
-const METER = 16;
+// The visible space wanted between neighbouring toolbar icons once expanded. The effort gauge is
+// drawn well inside its round button while the two meters fill their boxes, so equal box gaps
+// read as uneven; the meters' padding makes up the difference.
+const ICON_SPACING = 14;
+// Empty space inside the effort button on either side of its drawn gauge.
+const EFFORT_INSET = (BUTTON - EFFORT_METER_EXTENT) / 2;
+// Empty space inside the Stop button beside its square, when it sits uncoloured next to Send.
+const STOP_INSET = (BUTTON - 12) / 2;
+// Empty space inside the attach button beside its plus (24pt Feather glyph: 14pt of lines plus round caps).
+const ATTACH_INSET = (BUTTON - 16) / 2;
+
+/** Padding a meter needs on one side to sit ICON_SPACING from a neighbour with `neighbourInset`. */
+const roomBeside = (neighbourInset: number) => Math.max(0, ICON_SPACING - TOOLBAR_GAP - neighbourInset);
 
 /** How much taller the box stands at a given progress than it does collapsed. */
 export function composerGrowth(progress: number) {
@@ -63,6 +76,8 @@ type Props = {
   effort?: { levels: string[]; level: string; onPress: () => void };
   /** Shown beside the effort gauge while expanded, when context usage is turned on. */
   context?: ContextUsage | null;
+  /** Shown beside the context gauge while expanded, when the model runs on a subscription. */
+  quota?: SubscriptionQuota | null;
   /** Expansion, 0 collapsed to 1 expanded. The composer drives it; the screen reads it so the
    *  conversation's inset can follow the box's growth on the UI thread. */
   progress: SharedValue<number>;
@@ -84,6 +99,7 @@ export function Composer({
   keyboardVisible,
   effort,
   context,
+  quota,
   progress,
 }: Props) {
   const { colors } = useTheme();
@@ -100,7 +116,7 @@ export function Composer({
 
   // Popovers: the attach menu hangs off the box's top-left corner and the context breakdown off
   // its top-right, measured at open time so they track the box wherever the keyboard pushed it.
-  const [popover, setPopover] = useState<'attach' | 'context' | null>(null);
+  const [popover, setPopover] = useState<'attach' | 'context' | 'quota' | null>(null);
   const [anchor, setAnchor] = useState({
     x: TOOLBAR_PAD + 8,
     right: COLLAPSED.margin,
@@ -135,10 +151,22 @@ export function Composer({
     paddingLeft: interpolate(progress.value, [0, 1], [COLLAPSED.padLeft, EXPANDED.padLeft]),
     paddingRight: interpolate(progress.value, [0, 1], [collapsedPadRight, EXPANDED.padRight]),
   }));
-  // The meter grows in with the expanded toolbar; collapsed, it takes no room (its gap included).
+  // Toolbar: attach and the quota bar on the left; the context meter, effort gauge, then Stop
+  // and/or Send on the right. The meters' padding is set by what they sit beside, so every icon
+  // ends up ICON_SPACING from the next.
+  const meterPadRight = roomBeside(effort ? EFFORT_INSET : bothButtons ? STOP_INSET : 0);
+  const meterWidth = CONTEXT_METER_WIDTH + meterPadRight;
+  const quotaGap = Math.max(0, ICON_SPACING - ATTACH_INSET);
+
+  // The meters grow in with the expanded toolbar; collapsed, they take no room (their gap included).
   const meterStyle = useAnimatedStyle(() => ({
-    width: interpolate(progress.value, [0, 1], [0, METER]),
+    width: interpolate(progress.value, [0, 1], [0, meterWidth]),
     marginRight: interpolate(progress.value, [0, 1], [-TOOLBAR_GAP, 0]),
+    opacity: progress.value,
+  }));
+  const quotaStyle = useAnimatedStyle(() => ({
+    width: interpolate(progress.value, [0, 1], [0, QUOTA_METER_WIDTH]),
+    marginLeft: interpolate(progress.value, [0, 1], [0, quotaGap]),
     opacity: progress.value,
   }));
 
@@ -171,7 +199,7 @@ export function Composer({
   // Popovers float above the box, anchored where it measures to sit in the root overlay host.
   // Keeping them in the main Activity window (instead of Modal or OverKeyboardView) leaves the
   // keyboard open without relying on a separate WindowManager panel.
-  const openPopover = (which: 'attach' | 'context') => {
+  const openPopover = (which: 'attach' | 'context' | 'quota') => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     measureInOverlay(box.current, ({ x, y, width, hostWidth, hostHeight }) => {
       setAnchor({ x: x + TOOLBAR_PAD, right: hostWidth - x - width, bottom: hostHeight - y + 8, hostWidth });
@@ -212,6 +240,16 @@ export function Composer({
           visible={popover === 'context'}
           usage={context}
           right={anchor.right}
+          bottom={anchor.bottom}
+          maxWidth={anchor.hostWidth}
+          onClose={() => setPopover(null)}
+        />
+      )}
+      {quota && (
+        <QuotaPopover
+          visible={popover === 'quota'}
+          quota={quota}
+          left={anchor.x - TOOLBAR_PAD}
           bottom={anchor.bottom}
           maxWidth={anchor.hostWidth}
           onClose={() => setPopover(null)}
@@ -285,22 +323,46 @@ export function Composer({
 
       {/* Pinned to the bottom row: beside the text when collapsed, below it when expanded. */}
       <View style={styles.toolbar} pointerEvents="box-none">
-        <Pressable
-          onPress={() => openPopover('attach')}
-          hitSlop={6}
-          style={({ pressed }) => [styles.circle, pressed && { opacity: 0.5 }]}
-          accessibilityLabel="Attach"
-        >
-          <Feather name="plus" size={24} color={colors.text} />
-        </Pressable>
+        <View style={styles.leading}>
+          <Pressable
+            onPress={() => openPopover('attach')}
+            hitSlop={6}
+            style={({ pressed }) => [styles.circle, pressed && { opacity: 0.5 }]}
+            accessibilityLabel="Attach"
+          >
+            <Feather name="plus" size={24} color={colors.text} />
+          </Pressable>
+          {quota && (
+            <Animated.View style={[styles.meterSlot, quotaStyle]} pointerEvents={keyboardVisible ? 'auto' : 'none'}>
+              <Pressable
+                onPress={() => {
+                  quota.refresh();
+                  openPopover('quota');
+                }}
+                // Short on the left, where the attach button's own slop reaches.
+                hitSlop={{ top: 8, bottom: 8, left: 2, right: 10 }}
+                style={({ pressed }) => [styles.meterButton, { width: QUOTA_METER_WIDTH }, pressed && { opacity: 0.5 }]}
+                accessibilityLabel={quotaMeterLabel(quota.usage)}
+                accessibilityHint="Shows usage details"
+              >
+                <QuotaMeter usage={quota.usage} />
+              </Pressable>
+            </Animated.View>
+          )}
+        </View>
 
         <View style={styles.trailing}>
           {context && (
             <Animated.View style={[styles.meterSlot, meterStyle]} pointerEvents={keyboardVisible ? 'auto' : 'none'}>
               <Pressable
                 onPress={() => openPopover('context')}
-                hitSlop={{ top: 8, bottom: 8, left: 10, right: 6 }}
-                style={({ pressed }) => [styles.meterButton, pressed && { opacity: 0.5 }]}
+                // Kept narrow at the sides so it doesn't reach over the buttons beside it.
+                hitSlop={{ top: 8, bottom: 8, left: 10, right: 2 }}
+                style={({ pressed }) => [
+                  styles.meterButton,
+                  { width: meterWidth, paddingRight: meterPadRight },
+                  pressed && { opacity: 0.5 },
+                ]}
                 accessibilityLabel={`Context: ${Math.round(
                   ((context.system + context.tools + context.messages) / context.budget) * 100
                 )}% used`}
@@ -420,9 +482,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: TOOLBAR_PAD,
   },
+  leading: { flexDirection: 'row', alignItems: 'center' },
   trailing: { flexDirection: 'row', alignItems: 'center', gap: TOOLBAR_GAP },
   meterSlot: { height: BUTTON, overflow: 'hidden' },
-  meterButton: { width: METER, height: BUTTON, alignItems: 'center', justifyContent: 'center' },
+  // Width and side padding are set inline from the neighbours; the glyph sits between the paddings.
+  meterButton: { height: BUTTON, alignItems: 'center', justifyContent: 'center' },
   circle: { width: BUTTON, height: BUTTON, borderRadius: BUTTON / 2, alignItems: 'center', justifyContent: 'center' },
   continueIcon: { marginLeft: 2 },
   stop: { width: 12, height: 12, borderRadius: 2 },

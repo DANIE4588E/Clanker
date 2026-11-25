@@ -17,6 +17,7 @@ import { resolveEffort, useSettings } from '@/store/settings';
 import { useBackends } from '@/store/backends';
 import { resolveRemoteEffort } from '@/lib/remote/effort';
 import { useUI } from '@/store/ui';
+import { useSubscriptionQuota } from '@/lib/useSubscriptionQuota';
 import { Composer, composerGrowth } from './Composer';
 import { EdgeFade } from './EdgeFade';
 import { EffortSlider } from './EffortSlider';
@@ -111,6 +112,8 @@ export function ComposerDock({
     if (conversationId) useChats.getState().setRemote(conversationId, { effort: level });
     else if (backend) useBackends.getState().save({ ...backend, efforts: { ...backend.efforts, [backend.model]: level } });
   };
+  // Remote chats run on the host's models, so the phone's subscription quota doesn't apply.
+  const quota = useSubscriptionQuota(!remote);
   const effortOpen = useUI((s) => s.effortOpen);
   const setEffortOpen = useUI((s) => s.setEffortOpen);
   // Screens under the one on top keep their dock mounted; only the visible one shows the slider.
@@ -234,6 +237,7 @@ export function ComposerDock({
             keyboardVisible={keyboardVisible}
             effort={effort ? { ...effort, onPress: () => setEffortOpen(true) } : undefined}
             context={usage}
+            quota={quota}
             progress={progress}
           />
         </Animated.View>

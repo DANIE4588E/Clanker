@@ -1,18 +1,13 @@
-import { useEffect, useState } from 'react';
-import { BackHandler, Dimensions, Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { Easing, interpolate, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
-import { scheduleOnRN } from 'react-native-worklets';
-import { OverlayPortal } from '@/components/OverlayHost';
+import { StyleSheet, Text, View } from 'react-native';
+import { ComposerPopover } from '@/components/ComposerPopover';
 import { formatTokens } from '@/lib/context';
 import { useTheme, type Colors } from '@/lib/theme';
 import type { ContextUsage } from '@/lib/usage';
 import { useSettings } from '@/store/settings';
 
-// Same motion as the attach menu: a quick ease-out in, a shorter exit.
-const ENTER = { duration: 220, easing: Easing.bezier(0.23, 1, 0.32, 1) };
-const EXIT = { duration: 140, easing: Easing.bezier(0.3, 0, 0.8, 0.6) };
 const TOOLS_COLOR = '#A78BFA';
-const CARD_WIDTH = 320;
+/** The gauge's drawn width; the composer spaces it by this rather than its tap target. */
+export const CONTEXT_METER_WIDTH = 6;
 
 const totalOf = (u: ContextUsage) => u.system + u.tools + u.messages;
 
@@ -56,134 +51,71 @@ type PopoverProps = {
   onClose: () => void;
 };
 
-/** Breakdown of the context estimate, popping up from the composer's right-hand corner.
- *  Lives in the root in-window overlay host (not a Modal, which grabs focus and closes the
- *  keyboard, and not OverKeyboardView, which breaks touch hit-testing on some Android devices). */
+/** Breakdown of the context estimate, popping up from the composer's right-hand corner. */
 export function ContextPopover({ visible, usage, right, bottom, maxWidth, onClose }: PopoverProps) {
   const { colors } = useTheme();
-  const reduceMotion = useReducedMotion();
   // Past this share of the budget the app starts compressing history on its own.
   const warnPercent = useSettings((s) => s.compression.trigger);
-  const [mounted, setMounted] = useState(visible);
-  if (visible && !mounted) setMounted(true);
 
-  // The layer hosts no activity of its own, so back must be routed here while it is up.
-  useEffect(() => {
-    if (!visible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
-      return true;
-    });
-    return () => sub.remove();
-  }, [visible, onClose]);
-
-  const open = useSharedValue(0);
-  useEffect(() => {
-    if (visible) {
-      open.set(withTiming(1, ENTER));
-      return;
-    }
-    if (mounted) {
-      open.set(
-        withTiming(0, EXIT, (finished) => {
-          'worklet';
-          if (finished) scheduleOnRN(setMounted, false);
-        })
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
-
-  const cardStyle = useAnimatedStyle(() => ({
-    opacity: open.value,
-    transform: [
-      { translateY: interpolate(open.value, [0, 1], reduceMotion ? [8, 0] : [0, 0]) },
-      { scale: interpolate(open.value, [0, 1], reduceMotion ? [1, 1] : [0.92, 1]) },
-    ],
-  }));
-
-  if (!mounted) return null;
   const total = totalOf(usage);
   const percent = Math.round((total / usage.budget) * 100);
   const threshold = usage.remote ? 90 : warnPercent;
   const prefix = usage.estimated === false ? '' : '~';
   // Over budget, the bar shows each part's share of the total instead.
   const scale = Math.max(total, usage.budget);
-  const width = Math.min(CARD_WIDTH, (maxWidth ?? Dimensions.get('window').width) - 24);
 
   return (
-    <OverlayPortal>
-      <Pressable
-        style={StyleSheet.absoluteFill}
-        pointerEvents={visible ? 'auto' : 'none'}
-        onPress={visible ? onClose : undefined}
-        accessibilityLabel="Close context usage"
-      />
-      <Animated.View
-        pointerEvents={visible ? 'box-none' : 'none'}
-        style={[styles.anchor, { bottom, right: Math.max(12, right), width }, cardStyle]}
-      >
-        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <View style={styles.header}>
-            <Text style={[styles.headerText, { color: colors.textSecondary }]}>
-              <Text style={{ color: percent >= threshold ? colors.danger : colors.text, fontWeight: '700' }}>
-                {percent}%
-              </Text>
-              {'  '}of context used
-            </Text>
-            <Text style={[styles.headerText, { color: colors.text, fontWeight: '600' }]}>
-              {prefix}{formatTokens(total)} / {formatTokens(usage.budget)}
-            </Text>
-          </View>
-
-          <View style={[styles.bar, { backgroundColor: colors.surfaceHover }]}>
-            {parts(usage, colors).map((p) =>
-              p.tokens > 0 ? (
-                <View
-                  key={p.label}
-                  style={{ width: `${(p.tokens / scale) * 100}%`, minWidth: 3, backgroundColor: p.color, borderRadius: 3 }}
-                />
-              ) : null
-            )}
-          </View>
-
-          {parts(usage, colors).map((p) => (
-            <View key={p.label} style={styles.row}>
-              <View style={[styles.swatch, { backgroundColor: p.color }]} />
-              <Text style={[styles.rowLabel, { color: colors.text }]}>{p.label}</Text>
-              <Text style={[styles.rowValue, { color: colors.text }]}>{prefix}{formatTokens(p.tokens)}</Text>
-            </View>
-          ))}
-
-          <Text style={[styles.note, { color: colors.textTertiary }]}>
-            {usage.remote
-              ? `${usage.estimated ? 'Estimated by' : 'Reported by'} the remote backend. History and compression are managed on the host.`
-              : `Rough estimate against this model's budget. Past ${warnPercent}%, older history is compressed automatically.`}
+    <ComposerPopover
+      visible={visible}
+      right={right}
+      bottom={bottom}
+      maxWidth={maxWidth}
+      onClose={onClose}
+      closeLabel="Close context usage"
+    >
+      <View style={styles.header}>
+        <Text style={[styles.headerText, { color: colors.textSecondary }]}>
+          <Text style={{ color: percent >= threshold ? colors.danger : colors.text, fontWeight: '700' }}>
+            {percent}%
           </Text>
+          {'  '}of context used
+        </Text>
+        <Text style={[styles.headerText, { color: colors.text, fontWeight: '600' }]}>
+          {prefix}{formatTokens(total)} / {formatTokens(usage.budget)}
+        </Text>
+      </View>
+
+      <View style={[styles.bar, { backgroundColor: colors.surfaceHover }]}>
+        {parts(usage, colors).map((p) =>
+          p.tokens > 0 ? (
+            <View
+              key={p.label}
+              style={{ width: `${(p.tokens / scale) * 100}%`, minWidth: 3, backgroundColor: p.color, borderRadius: 3 }}
+            />
+          ) : null
+        )}
+      </View>
+
+      {parts(usage, colors).map((p) => (
+        <View key={p.label} style={styles.row}>
+          <View style={[styles.swatch, { backgroundColor: p.color }]} />
+          <Text style={[styles.rowLabel, { color: colors.text }]}>{p.label}</Text>
+          <Text style={[styles.rowValue, { color: colors.text }]}>{prefix}{formatTokens(p.tokens)}</Text>
         </View>
-      </Animated.View>
-    </OverlayPortal>
+      ))}
+
+      <Text style={[styles.note, { color: colors.textTertiary }]}>
+        {usage.remote
+          ? `${usage.estimated ? 'Estimated by' : 'Reported by'} the remote backend. History and compression are managed on the host.`
+          : `Rough estimate against this model's budget. Past ${warnPercent}%, older history is compressed automatically.`}
+      </Text>
+    </ComposerPopover>
   );
 }
 
 const styles = StyleSheet.create({
-  meter: { width: 6, height: 22, borderRadius: 3, overflow: 'hidden', justifyContent: 'flex-end' },
+  meter: { width: CONTEXT_METER_WIDTH, height: 22, borderRadius: 3, overflow: 'hidden', justifyContent: 'flex-end' },
   meterFill: { width: '100%', borderRadius: 3 },
-  anchor: {
-    position: 'absolute',
-    // The card grows out of the meter, near the composer's bottom-right corner.
-    transformOrigin: '100% 100%',
-  },
-  card: {
-    borderRadius: 22,
-    padding: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 16,
-  },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   headerText: { fontSize: 16 },
   bar: { flexDirection: 'row', gap: 2, height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 14, marginBottom: 8 },

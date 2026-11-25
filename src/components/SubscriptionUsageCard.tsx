@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { formatResetTime, type SubscriptionUsage, type UsageWindow } from '@/lib/subscriptions/usage';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { formatResetTime, glanceWindows, shortWindowLabel, type SubscriptionUsage, type UsageWindow } from '@/lib/subscriptions/usage';
 import { useTheme, type Colors } from '@/lib/theme';
 
 const WARN_COLOR = '#F59E0B';
@@ -11,7 +11,7 @@ export function usageToneColor(remainingPercent: number, colors: Colors): string
   return colors.success;
 }
 
-function formatUpdatedAt(ts: number): string {
+export function formatUpdatedAt(ts: number): string {
   const diffSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (diffSec < 45) return 'Updated just now';
   const mins = Math.round(diffSec / 60);
@@ -21,7 +21,7 @@ function formatUpdatedAt(ts: number): string {
   return `Updated ${Math.round(hours / 24)}d ago`;
 }
 
-function WindowMeter({ window, colors }: { window: UsageWindow; colors: Colors }) {
+export function WindowMeter({ window, colors }: { window: UsageWindow; colors: Colors }) {
   const fill = usageToneColor(window.remainingPercent, colors);
   const reset = window.resetsAt ? `Resets ${formatResetTime(window.resetsAt)}` : undefined;
   const sub = [window.detail, reset].filter(Boolean).join(' · ');
@@ -122,85 +122,48 @@ export function SubscriptionUsageCard({
 }
 
 /**
- * Compact horizontal usage-left strip shown inside ModelPicker under each subscription heading.
+ * Compact usage-left rows (label, bar, percent) for a subscription's heading in the model sheet:
+ * the main windows, plus any other that is running low.
  */
-export function SubscriptionUsageStrip({
-  usage,
-  loading,
-  onRefresh,
-}: {
-  usage?: SubscriptionUsage;
-  loading?: boolean;
-  onRefresh?: () => void;
-}) {
+export function QuotaLines({ usage, loading }: { usage?: SubscriptionUsage; loading?: boolean }) {
   const { colors } = useTheme();
-  const windows = usage?.windows ?? [];
+  const windows = glanceWindows(usage);
 
-  if (!windows.length && !loading && !usage?.error) return null;
+  if (!windows.length) {
+    if (!loading && !usage?.error) return null;
+    return (
+      <View style={styles.linesStatus}>
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.textTertiary} />
+        ) : (
+          <Feather name="alert-circle" size={13} color={colors.textTertiary} />
+        )}
+        <Text style={[styles.lineLabel, { color: colors.textTertiary }]}>
+          {loading ? 'Checking usage…' : 'Usage unavailable right now'}
+        </Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.stripWrap}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.stripContent}
-        style={styles.stripScroll}
-      >
-        {windows.slice(0, 4).map((w) => {
-          const fill = usageToneColor(w.remainingPercent, colors);
-          const shortLabel = w.label.replace(/-hour$/i, 'h').replace(/-day$/i, 'd');
-          const reset = w.resetsAt ? formatResetTime(w.resetsAt) : undefined;
-          return (
-            <View key={w.id} style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <View style={styles.chipTop}>
-                <Text numberOfLines={1} style={[styles.chipLabel, { color: colors.textSecondary }]}>
-                  {shortLabel}
-                </Text>
-                <Text style={[styles.chipPct, { color: w.remainingPercent <= 25 ? fill : colors.text }]}>
-                  {w.remainingPercent}% left
-                </Text>
-              </View>
-              <View style={[styles.miniTrack, { backgroundColor: colors.surfaceHover }]}>
-                <View style={[styles.miniFill, { width: `${Math.max(3, w.remainingPercent)}%`, backgroundColor: fill }]} />
-              </View>
-              {!!reset && (
-                <Text numberOfLines={1} style={[styles.chipReset, { color: colors.textTertiary }]}>
-                  Resets {reset}
-                </Text>
-              )}
+    <View style={styles.lines}>
+      {windows.map((w) => {
+        const fill = usageToneColor(w.remainingPercent, colors);
+        const reset = w.resetsAt ? `, resets ${formatResetTime(w.resetsAt)}` : '';
+        return (
+          <View key={w.id} style={styles.line} accessible accessibilityLabel={`${w.label}: ${w.remainingPercent}% left${reset}`}>
+            <Text numberOfLines={1} style={[styles.lineLabel, styles.lineName, { color: colors.textSecondary }]}>
+              {shortWindowLabel(w.label)}
+            </Text>
+            <View style={[styles.lineTrack, { backgroundColor: colors.surfaceHover }]}>
+              <View style={[styles.lineFill, { width: `${Math.max(2, w.remainingPercent)}%`, backgroundColor: fill }]} />
             </View>
-          );
-        })}
-        {!windows.length && loading && (
-          <View style={[styles.chip, styles.loadingChip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <ActivityIndicator size="small" color={colors.textTertiary} />
-            <Text style={[styles.chipLabel, { color: colors.textTertiary }]}>Checking usage…</Text>
-          </View>
-        )}
-        {!windows.length && !loading && usage?.error && (
-          <View style={[styles.chip, styles.loadingChip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Feather name="alert-circle" size={12} color={colors.textTertiary} />
-            <Text numberOfLines={1} style={[styles.chipLabel, { color: colors.textTertiary }]}>
-              Usage unavailable
+            <Text style={[styles.linePct, { color: w.remainingPercent <= 25 ? fill : colors.textSecondary }]}>
+              {w.remainingPercent}%
             </Text>
           </View>
-        )}
-      </ScrollView>
-      {onRefresh && (
-        <Pressable
-          onPress={onRefresh}
-          disabled={loading}
-          hitSlop={8}
-          accessibilityLabel="Refresh usage"
-          style={({ pressed }) => [styles.stripRefresh, pressed && { opacity: 0.5 }]}
-        >
-          {loading ? (
-            <ActivityIndicator size="small" color={colors.textTertiary} />
-          ) : (
-            <Feather name="refresh-cw" size={13} color={colors.textTertiary} />
-          )}
-        </Pressable>
-      )}
+        );
+      })}
     </View>
   );
 }
@@ -226,24 +189,12 @@ const styles = StyleSheet.create({
   errorBox: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10, padding: 10, marginTop: 12 },
   errorText: { fontSize: 13, flex: 1, lineHeight: 18 },
 
-  stripWrap: { flexDirection: 'row', alignItems: 'center', paddingRight: 16, marginBottom: 4 },
-  stripScroll: { flex: 1 },
-  stripContent: { gap: 8, paddingLeft: 20, paddingRight: 6, paddingVertical: 4 },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    minWidth: 112,
-    maxWidth: 180,
-    gap: 4,
-  },
-  loadingChip: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
-  chipTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
-  chipLabel: { fontSize: 12, fontWeight: '500', flexShrink: 1 },
-  chipPct: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  miniTrack: { height: 4, borderRadius: 2, overflow: 'hidden' },
-  miniFill: { height: '100%', borderRadius: 2 },
-  chipReset: { fontSize: 11 },
-  stripRefresh: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  lines: { gap: 7, paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
+  linesStatus: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 },
+  line: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  lineLabel: { fontSize: 12, fontWeight: '500' },
+  lineName: { width: 64 },
+  lineTrack: { flex: 1, height: 4, borderRadius: 2, overflow: 'hidden' },
+  lineFill: { height: '100%', borderRadius: 2 },
+  linePct: { width: 36, textAlign: 'right', fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });

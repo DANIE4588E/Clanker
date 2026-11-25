@@ -10,6 +10,8 @@ const C = SIZE / 2;
 const R = 8.25;
 const STROKE = 2.4;
 const NEEDLE = R - STROKE;
+/** How wide the drawn gauge is at the default size, its stroke included; the rest of its box is empty. */
+export const EFFORT_METER_EXTENT = 2 * (R + STROKE / 2);
 const START = -135;
 const SWEEP = 270;
 

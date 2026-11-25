@@ -267,10 +267,27 @@ export function formatResetTime(resetsAt: number, now = Date.now()): string {
   return hours > 0 ? `in ${days}d ${hours}h` : `in ${days}d`;
 }
 
-/** Picks the headline remaining percentage for a compact badge (e.g. ChatHeader). */
-export function headlineWindow(usage: SubscriptionUsage | undefined, _model?: string): UsageWindow | undefined {
-  if (!usage?.windows.length) return undefined;
-  return usage.windows[0];
+/**
+ * The short rolling window (5-hour on both Codex and Claude), the one a session runs into first.
+ * Falls back to the first reported window if the short one is missing.
+ */
+export function sessionWindow(usage: SubscriptionUsage | undefined): UsageWindow | undefined {
+  const windows = usage?.windows ?? [];
+  return windows.find((w) => w.id === 'five_hour' || w.id === 'primary') ?? windows[0];
+}
+
+/** The windows worth a line in a compact list: the main two, plus any other that is running low. */
+export function glanceWindows(usage: SubscriptionUsage | undefined, lowPercent = 25): UsageWindow[] {
+  return (usage?.windows ?? []).filter((w, i) => i < 2 || w.remainingPercent <= lowPercent);
+}
+
+/** Shortens a window label for tight rows: "5-hour" → "5h", "Opus (7-day)" → "Opus 7d". */
+export function shortWindowLabel(label: string): string {
+  return label
+    .replace(/(\d+)-hour/gi, '$1h')
+    .replace(/(\d+)-day/gi, '$1d')
+    .replace(/(\d+)-min/gi, '$1m')
+    .replace(/\s*\((.+)\)$/, ' $1');
 }
 
 /** One-line summary of remaining subscription usage for Settings rows and subtitles. */
@@ -278,9 +295,6 @@ export function compactUsageSummary(usage: SubscriptionUsage | undefined, _model
   if (!usage?.windows.length) return undefined;
   return usage.windows
     .slice(0, 2)
-    .map((w) => {
-      const short = w.label.replace(/-hour$/i, 'h').replace(/-day$/i, 'd');
-      return `${short} ${w.remainingPercent}% left`;
-    })
+    .map((w) => `${shortWindowLabel(w.label)} ${w.remainingPercent}% left`)
     .join(' · ');
 }

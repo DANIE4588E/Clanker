@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,10 +9,10 @@ import { scheduleOnRN } from 'react-native-worklets';
 import { useShallow } from 'zustand/react/shallow';
 import { isSubscriptionType, PROVIDER_LABELS, type Endpoint } from '@/lib/providers';
 import { BrandIcon, type BrandId } from './BrandIcon';
-import { SubscriptionUsageStrip, usageToneColor } from './SubscriptionUsageCard';
+import { QuotaLines, usageToneColor } from './SubscriptionUsageCard';
 import { brandOfBackendKind, brandOfEndpoint, brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { accountsOf, accountUsageKey, primaryDisplayAccount } from '@/lib/subscriptions/router';
-import { headlineWindow } from '@/lib/subscriptions/usage';
+import { sessionWindow } from '@/lib/subscriptions/usage';
 import { useTheme } from '@/lib/theme';
 import { groupByProvider, groupLabel, isModelHidden, modelGroup, modelInGroup, modelProvider } from '@/lib/remote/types';
 import { useBackends } from '@/store/backends';
@@ -373,14 +373,35 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
                   const isManual = sub?.accountMode === 'manual';
                   const activeAccId = sub?.activeAccountId ?? subAccounts[0]?.id;
 
+                  const plan = sub ? (subUsage?.plan ?? sub.subscriptionPlan) : undefined;
+
                   return (
                     <View>
                       <View style={styles.sectionRow}>
                         {section.brand && <BrandIcon brand={section.brand} size={14} />}
-                        <Text style={[styles.section, { color: colors.textTertiary }]}>
+                        <Text numberOfLines={1} style={[styles.section, styles.sectionTitle, { color: colors.textTertiary }]}>
                           {section.title}
-                          {sub && (subUsage?.plan ?? sub.subscriptionPlan) ? ` · ${subUsage?.plan ?? sub.subscriptionPlan}` : ''}
                         </Text>
+                        {!!plan && (
+                          <View style={[styles.planBadge, { backgroundColor: colors.surface }]}>
+                            <Text style={[styles.planText, { color: colors.textSecondary }]}>{plan}</Text>
+                          </View>
+                        )}
+                        {sub && (
+                          <Pressable
+                            onPress={() => void useSubscriptionUsage.getState().refresh(sub, { force: true })}
+                            disabled={subLoading}
+                            hitSlop={10}
+                            accessibilityLabel={`Refresh ${sub.name} usage`}
+                            style={({ pressed }) => [styles.sectionRefresh, pressed && { opacity: 0.5 }]}
+                          >
+                            {subLoading ? (
+                              <ActivityIndicator size="small" color={colors.textTertiary} />
+                            ) : (
+                              <Feather name="refresh-cw" size={13} color={colors.textTertiary} />
+                            )}
+                          </Pressable>
+                        )}
                       </View>
                       {sub && subAccounts.length > 1 && (
                         <ScrollView
@@ -390,65 +411,52 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
                           style={styles.accountChipsRow}
                         >
                           <Pressable
-                            onPress={() =>
-                              useSettings.getState().upsertEndpoint({ ...sub, accountMode: 'auto' })
-                            }
-                            style={[
+                            onPress={() => useSettings.getState().upsertEndpoint({ ...sub, accountMode: 'auto' })}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: !isManual }}
+                            accessibilityLabel="Auto: use the account with the most usage left"
+                            style={({ pressed }) => [
                               styles.accountChip,
-                              {
-                                borderColor: !isManual ? colors.text : colors.border,
-                                backgroundColor: !isManual ? colors.surface : 'transparent',
-                              },
+                              { backgroundColor: !isManual ? colors.segmentThumb : colors.surface, borderColor: !isManual ? colors.text : 'transparent' },
+                              pressed && { opacity: 0.6 },
                             ]}
                           >
                             <Feather name="shuffle" size={11} color={!isManual ? colors.text : colors.textSecondary} />
-                            <Text style={[styles.accountChipText, { color: !isManual ? colors.text : colors.textSecondary }]}>
-                              Auto
-                            </Text>
+                            <Text style={[styles.accountChipText, { color: !isManual ? colors.text : colors.textSecondary }]}>Auto</Text>
                           </Pressable>
                           {subAccounts.map((acc) => {
-                            const accUsage = byAccount[accountUsageKey(sub.id, acc.id)];
-                            const pct = headlineWindow(accUsage)?.remainingPercent;
+                            const pct = sessionWindow(byAccount[accountUsageKey(sub.id, acc.id)])?.remainingPercent;
                             const selected = isManual && activeAccId === acc.id;
                             const shortName = (acc.email ?? acc.label).split('@')[0];
                             return (
                               <Pressable
                                 key={acc.id}
                                 onPress={() =>
-                                  useSettings
-                                    .getState()
-                                    .upsertEndpoint({ ...sub, accountMode: 'manual', activeAccountId: acc.id })
+                                  useSettings.getState().upsertEndpoint({ ...sub, accountMode: 'manual', activeAccountId: acc.id })
                                 }
-                                style={[
+                                accessibilityRole="radio"
+                                accessibilityState={{ checked: selected }}
+                                accessibilityLabel={`${shortName}${typeof pct === 'number' ? `, ${pct}% left` : ''}`}
+                                style={({ pressed }) => [
                                   styles.accountChip,
-                                  {
-                                    borderColor: selected ? colors.text : colors.border,
-                                    backgroundColor: selected ? colors.surface : 'transparent',
-                                  },
+                                  { backgroundColor: selected ? colors.segmentThumb : colors.surface, borderColor: selected ? colors.text : 'transparent' },
+                                  pressed && { opacity: 0.6 },
                                 ]}
                               >
-                                {typeof pct === 'number' && (
-                                  <View style={[styles.accountDot, { backgroundColor: usageToneColor(pct, colors) }]} />
-                                )}
-                                <Text
-                                  numberOfLines={1}
-                                  style={[styles.accountChipText, { color: selected ? colors.text : colors.textSecondary }]}
-                                >
+                                <Text numberOfLines={1} style={[styles.accountChipText, { color: selected ? colors.text : colors.textSecondary }]}>
                                   {shortName}
-                                  {typeof pct === 'number' ? ` ${pct}%` : ''}
                                 </Text>
+                                {typeof pct === 'number' && (
+                                  <Text style={[styles.accountChipPct, { color: pct <= 25 ? usageToneColor(pct, colors) : colors.textTertiary }]}>
+                                    {pct}%
+                                  </Text>
+                                )}
                               </Pressable>
                             );
                           })}
                         </ScrollView>
                       )}
-                      {sub && (
-                        <SubscriptionUsageStrip
-                          usage={subUsage}
-                          loading={subLoading}
-                          onRefresh={() => void useSubscriptionUsage.getState().refresh(sub, { force: true })}
-                        />
-                      )}
+                      {sub && <QuotaLines usage={subUsage} loading={subLoading} />}
                     </View>
                   );
                 }}
@@ -572,20 +580,25 @@ const styles = StyleSheet.create({
   // Vertical padding lives on the row, not the label: uneven padding on the text would center the
   // brand mark against the padded box and lift it above the label.
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 },
-  accountChipsRow: { flexGrow: 0, flexShrink: 0, marginTop: 2, marginBottom: 2 },
+  sectionTitle: { flexShrink: 1 },
+  planBadge: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
+  planText: { fontSize: 11, fontWeight: '600' },
+  // Pushed to the row's end; sized so the spinner swapping in doesn't shift the row.
+  sectionRefresh: { marginLeft: 'auto', width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
+  accountChipsRow: { flexGrow: 0, flexShrink: 0, marginTop: 4, marginBottom: 6 },
   accountChips: { gap: 6, paddingHorizontal: 20 },
   accountChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    maxWidth: 160,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    maxWidth: 170,
   },
   accountChipText: { fontSize: 12, fontWeight: '500', flexShrink: 1 },
-  accountDot: { width: 6, height: 6, borderRadius: 3 },
+  accountChipPct: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
   modelWithBrand: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, minWidth: 0 },
   section: { fontSize: 13, fontWeight: '500' },
   // Standalone section labels carry the row's inset themselves.
