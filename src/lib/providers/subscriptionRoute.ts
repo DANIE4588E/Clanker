@@ -35,7 +35,7 @@ export async function withSubscriptionAccount<T>(
     model: opts.model,
   });
   if (!candidates.length) {
-    throw new ProviderError('No signed-in account for this subscription. Sign in from Settings → Subscriptions.', 401);
+    throw new ProviderError('No signed-in account for this subscription. Sign in from Settings → Providers.', 401);
   }
 
   let lastError: unknown;

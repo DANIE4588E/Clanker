@@ -516,7 +516,7 @@ export function ModelPicker({ visible, onClose, conversationId }: Props) {
           <Pressable
             onPress={() => {
               onClose();
-              router.push(remote && backend ? { pathname: '/settings/backend', params: { id: backend.id } } : '/settings');
+              router.push(remote && backend ? { pathname: '/settings/backend', params: { id: backend.id } } : '/settings/providers');
             }}
             style={({ pressed }) => [styles.manage, pressed && { opacity: 0.6 }]}
           >

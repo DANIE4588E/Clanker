@@ -74,7 +74,7 @@ export function deleteProject(id: string) {
   try {
     projectWorkspace(id).remove();
   } catch {
-    // Left for Settings → Workspace files.
+    // Left for Settings → Agent → Workspace files.
   }
   const ui = useUI.getState();
   if (ui.newChatProjectId === id || (ui.currentId && !useChats.getState().conversations[ui.currentId])) ui.open(null);

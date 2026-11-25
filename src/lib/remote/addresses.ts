@@ -23,7 +23,7 @@ export async function resolveBridgeAddress(backend: RemoteBackend, token: string
   const cached = known.get(cacheKey);
   if (!force && cached?.token === token && Date.now() - cached.at < 30000) return cached.connection;
   const addresses = bridgeAddresses(backend);
-  if (!addresses.length) throw new Error('Add a bridge address in Settings → Backends.');
+  if (!addresses.length) throw new Error('Add a bridge address in Settings → Providers.');
   const controllers = addresses.map(() => new AbortController());
   try {
     const connection = await Promise.any(addresses.map(async (url, index): Promise<Connection> => {

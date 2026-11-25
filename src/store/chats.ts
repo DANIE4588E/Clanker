@@ -229,7 +229,7 @@ export const useChats = create<ChatsState>()(
             try {
               chatWorkspace(id).remove();
             } catch {
-              // The files stay behind; Settings → Workspace files can still delete them.
+              // The files stay behind; Settings → Agent → Workspace files can still delete them.
             }
           }
           set((s) => {

@@ -70,6 +70,11 @@ export default function RootLayout() {
             <Stack screenOptions={{ headerShadowVisible: false, headerBackButtonDisplayMode: 'minimal', freezeOnBlur: true }}>
               <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
               <Stack.Screen name="settings/index" options={{ title: 'Settings' }} />
+              <Stack.Screen name="settings/general" options={{ title: 'General' }} />
+              <Stack.Screen name="settings/providers" options={{ title: 'Providers' }} />
+              <Stack.Screen name="settings/agent" options={{ title: 'Agent' }} />
+              <Stack.Screen name="settings/appearance" options={{ title: 'Appearance' }} />
+              <Stack.Screen name="settings/updates" options={{ title: 'Updates' }} />
               <Stack.Screen name="settings/backend" options={{ presentation: 'modal', title: 'Backend' }} />
               <Stack.Screen name="settings/endpoint" options={{ presentation: 'modal', title: 'Endpoint' }} />
               <Stack.Screen name="settings/subscription" options={{ presentation: 'modal', title: 'Subscription' }} />

@@ -36,7 +36,7 @@ const HEADER_FADE = 16;
 export function reportSendError(e: unknown) {
   Alert.alert('No model selected', e instanceof Error ? e.message : String(e), [
     { text: 'Cancel', style: 'cancel' },
-    { text: 'Open Settings', onPress: () => router.push('/settings') },
+    { text: 'Open Settings', onPress: () => router.push('/settings/providers') },
   ]);
 }
 

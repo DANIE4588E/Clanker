@@ -11,7 +11,7 @@ export class RemoteAdapter {
 
   private async request(path: string, init: RequestInit = {}, retrySafe = false) {
     const token = this.token ?? await apiKeys.get(`bridge_${this.backend.id}`);
-    if (!token) throw new Error('Set the bridge token in Settings → Backends.');
+    if (!token) throw new Error('Set the bridge token in Settings → Providers.');
     const selected = await resolveBridgeAddress(this.backend, token, fetch);
     const send = async (url: string) => {
       const controller = new AbortController();
@@ -48,7 +48,7 @@ export class RemoteAdapter {
 
   async info(): Promise<BridgeInfo> {
     const token = this.token ?? await apiKeys.get(`bridge_${this.backend.id}`);
-    if (!token) throw new Error('Set the bridge token in Settings → Backends.');
+    if (!token) throw new Error('Set the bridge token in Settings → Providers.');
     return (await resolveBridgeAddress(this.backend, token, fetch, true)).info;
   }
 

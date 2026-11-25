@@ -4,7 +4,7 @@ import { FileList } from '@/components/FileList';
 import { workspaceLabel } from '@/lib/projects';
 import { Workspace } from '@/lib/workspace';
 
-/** The files in one workspace, from Settings → Workspace files. */
+/** The files in one workspace, from Settings → Agent → Workspace files. */
 export default function WorkspaceFilesScreen() {
   const { key } = useLocalSearchParams<{ key: string }>();
   const workspace = useMemo(() => new Workspace(key ?? 'shared'), [key]);

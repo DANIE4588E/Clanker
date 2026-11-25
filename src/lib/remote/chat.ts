@@ -21,7 +21,7 @@ export function isRemoteChat(id: string | null) {
 export function adapterForChat(id: string) {
   const chat = useChats.getState().conversations[id];
   const backend = useBackends.getState().remotes.find((b) => b.id === chat?.backendId);
-  if (!backend) throw new Error('This backend was removed. Restore its connection in Settings → Backends.');
+  if (!backend) throw new Error('This backend was removed. Restore its connection in Settings → Providers.');
   return new RemoteAdapter({ ...backend, bridgeId: chat.remote?.bridgeId ?? backend.bridgeId });
 }
 
@@ -45,7 +45,7 @@ export function sendRemoteMessage(id: string | null, text: string, attachments: 
   let backend: RemoteBackend | undefined;
   if (!id) {
     backend = useBackends.getState().remotes.find((b) => b.id === useBackends.getState().selected);
-    if (!backend?.bridgeId || !backend.model) throw new Error('Test and save a backend connection in Settings → Backends first.');
+    if (!backend?.bridgeId || !backend.model) throw new Error('Test and save a backend connection in Settings → Providers first.');
     const projectId = useUI.getState().newChatProjectId;
     id = chats.create('', backend.model, {
       backendId: backend.id, remote: { bridgeId: backend.bridgeId, effort: resolveRemoteEffort(backend, backend.model)?.level, instructions: projectId ? useProjects.getState().projects[projectId]?.instructions ?? '' : '' }, memory: false,

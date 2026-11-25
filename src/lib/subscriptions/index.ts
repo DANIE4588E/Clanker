@@ -138,7 +138,7 @@ export async function getValidCredentials(
   const slot = credentialSlot(endpoint.id, accountId);
   const stored = opts?.override ?? (await subscriptionAuth.get(endpoint.id, accountId));
   if (!stored) {
-    throw new ProviderError(`Not signed in to ${SUBSCRIPTION_META[type].name}. Sign in from Settings → Subscriptions.`, 401);
+    throw new ProviderError(`Not signed in to ${SUBSCRIPTION_META[type].name}. Sign in from Settings → Providers.`, 401);
   }
   const needsRefresh =
     opts?.forceRefresh ||

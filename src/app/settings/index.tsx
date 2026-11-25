@@ -1,304 +1,98 @@
 import Constants from 'expo-constants';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Row, Section, ToggleRow } from '@/components/Form';
-import { SegmentedControl } from '@/components/SegmentedControl';
-import { UpdateRow } from '@/components/Updates';
-import { isSubscriptionType, PROVIDER_LABELS } from '@/lib/providers';
-import { brandOfBackendKind, brandOfEndpoint, friendlyModelName } from '@/lib/modelNames';
-import { accountsOf, primaryDisplayAccount } from '@/lib/subscriptions/router';
-import { compactUsageSummary } from '@/lib/subscriptions/usage';
-import { entryAvailable } from '@/lib/tools';
-import { entryOn, LOCAL_TOOL_GROUPS, WEB_TOOLS } from '@/lib/tools/catalog';
+import { router } from 'expo-router';
+import { ScrollView, StyleSheet, Text } from 'react-native';
+import { Row, Section } from '@/components/Form';
+import { isSubscriptionType } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
-import { SEARCH_PROVIDERS } from '@/lib/tools/web';
+import { countToolsOn } from '@/lib/tools/summary';
 import { updatesSupported } from '@/lib/updates';
 import { useBackends } from '@/store/backends';
-import { useMemory } from '@/store/memory';
-import { useSettings, type FollowUpMode, type ThemePreference } from '@/store/settings';
-import { useSubscriptionUsage } from '@/store/subscriptionUsage';
-import { useUpdates } from '@/store/updates';
+import { useSettings, type ThemePreference } from '@/store/settings';
+import { useUpdates, type UpdatePhase } from '@/store/updates';
 
-const THEMES: { value: ThemePreference; label: string; icon: 'smartphone' | 'sun' | 'moon' }[] = [
-  { value: 'system', label: 'System', icon: 'smartphone' },
-  { value: 'light', label: 'Light', icon: 'sun' },
-  { value: 'dark', label: 'Dark', icon: 'moon' },
-];
+const THEME_LABELS: Record<ThemePreference, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 
-const FOLLOW_UPS: { value: FollowUpMode; label: string; icon: 'list' | 'corner-down-right' }[] = [
-  { value: 'queue', label: 'Queue', icon: 'list' },
-  { value: 'steer', label: 'Steer', icon: 'corner-down-right' },
-];
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-/** How many of the listed tools are on, out of those this device has. */
-function countOn(disabled: string[]) {
-  const entries = LOCAL_TOOL_GROUPS.flatMap((g) => g.tools).filter(entryAvailable);
-  return { on: entries.filter((e) => entryOn(e, disabled)).length, total: entries.length };
+function providersDetail(subscriptions: number, endpoints: number, remotes: number) {
+  const parts = [
+    subscriptions && plural(subscriptions, 'subscription'),
+    endpoints && plural(endpoints, 'endpoint'),
+    remotes && plural(remotes, 'remote backend'),
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'Connect a subscription, API or remote backend';
 }
 
-function webDetail(provider: string, disabled: string[]) {
-  const [search, fetch] = WEB_TOOLS.map((e) => entryOn(e, disabled));
-  if (search && fetch) return `Search with ${provider} and read pages`;
-  if (search) return `Search with ${provider}`;
-  return fetch ? 'Read web pages' : 'Every web tool is turned off';
+function agentDetail(tools: boolean, web: boolean, disabled: string[]) {
+  if (!tools) return 'Tools are off';
+  const { on, total } = countToolsOn(disabled);
+  const files = on === total ? 'Files & code' : `${on} of ${total} tools`;
+  return web ? `${files} · Web access` : files;
 }
 
+function updatesValue(status: UpdatePhase) {
+  switch (status.phase) {
+    case 'available':
+      return 'New version';
+    case 'downloading':
+      return `${Math.round(status.progress * 100)}%`;
+    case 'ready':
+      return 'Ready to install';
+    default:
+      return undefined;
+  }
+}
+
+/** The top of Settings: one row per category, each opening its own screen. */
 export default function SettingsScreen() {
   const { colors } = useTheme();
   const endpoints = useSettings((s) => s.endpoints);
-  const subscriptions = endpoints.filter((e) => isSubscriptionType(e.type));
-  const apiEndpoints = endpoints.filter((e) => !isSubscriptionType(e.type));
-  const byAccount = useSubscriptionUsage((s) => s.byAccount);
-  const remotes = useBackends((s) => s.remotes);
-
-  useFocusEffect(
-    useCallback(() => {
-      const subs = useSettings.getState().endpoints.filter((e) => isSubscriptionType(e.type));
-      for (const sub of subs) void useSubscriptionUsage.getState().refresh(sub);
-    }, [])
-  );
+  const subscriptions = endpoints.filter((e) => isSubscriptionType(e.type)).length;
+  const remotes = useBackends((s) => s.remotes.length);
   const theme = useSettings((s) => s.theme);
-  const setTheme = useSettings((s) => s.setTheme);
   const tools = useSettings((s) => s.tools);
-  const setTools = useSettings((s) => s.setTools);
-  const disabledTools = useSettings((s) => s.disabledTools);
   const web = useSettings((s) => s.web);
-  const setWeb = useSettings((s) => s.setWeb);
-  const searchProvider = useSettings((s) => s.search.provider);
-  const contextUsage = useSettings((s) => s.contextUsage);
-  const setContextUsage = useSettings((s) => s.setContextUsage);
-  const decodeSpeed = useSettings((s) => s.decodeSpeed);
-  const setDecodeSpeed = useSettings((s) => s.setDecodeSpeed);
-  const cacheHits = useSettings((s) => s.cacheHits);
-  const setCacheHits = useSettings((s) => s.setCacheHits);
-  const compression = useSettings((s) => s.compression);
-  const memory = useSettings((s) => s.memory);
-  const setMemory = useSettings((s) => s.setMemory);
-  const showArchived = useSettings((s) => s.showArchived);
-  const setShowArchived = useSettings((s) => s.setShowArchived);
-  const titleGeneration = useSettings((s) => s.titleGeneration);
-  const setTitleGeneration = useSettings((s) => s.setTitleGeneration);
-  const suggestions = useSettings((s) => s.suggestions);
-  const setSuggestions = useSettings((s) => s.setSuggestions);
-  const followUp = useSettings((s) => s.followUp);
-  const setFollowUp = useSettings((s) => s.setFollowUp);
-  const friendly = useSettings((s) => s.friendlyModelNames);
-  const setFriendly = useSettings((s) => s.setFriendlyModelNames);
-  const memoryCount = useMemory((s) => s.memories.filter((m) => !m.projectId).length);
-  const checkOnLaunch = useUpdates((s) => s.checkOnLaunch);
-  const setCheckOnLaunch = useUpdates((s) => s.setCheckOnLaunch);
-  const prereleases = useUpdates((s) => s.prereleases);
-  const setPrereleases = useUpdates((s) => s.setPrereleases);
-
-  const { on, total } = countOn(disabledTools);
+  const disabledTools = useSettings((s) => s.disabledTools);
+  const updateStatus = useUpdates((s) => s.status);
 
   return (
     <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={styles.content}>
-      <Section
-        title="Subscriptions"
-        footer="Connect a Codex or Claude subscription without an API key. Tokens stay in the device keychain."
-      >
-        {subscriptions.map((e) => {
-          const accounts = accountsOf(e);
-          const { account, usage: u } = primaryDisplayAccount(e, byAccount);
-          const summary = compactUsageSummary(u);
-          const plan = u?.plan ?? account?.plan ?? e.subscriptionPlan;
-          const multiPrefix =
-            accounts.length > 1
-              ? e.accountMode === 'manual'
-                ? `${account?.label ?? 'Manual'} (${accounts.length})`
-                : `Auto · ${accounts.length} accounts`
-              : plan ?? e.subscriptionAccount;
-          const detail = summary
-            ? [multiPrefix, summary].filter(Boolean).join(' · ')
-            : [multiPrefix, `${e.models.length} model${e.models.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
-          return (
-            <Row
-              key={e.id}
-              icon="user-check"
-              brand={friendly ? brandOfEndpoint(e) : undefined}
-              title={e.name}
-              detail={detail}
-              value={summary ? `${e.models.length}m` : undefined}
-              onPress={() => router.push({ pathname: '/settings/subscription', params: { id: e.id } })}
-            />
-          );
-        })}
-        <Row icon="plus" title="Add subscription" tint="link" onPress={() => router.push('/settings/subscription')} />
-      </Section>
-
-      <Section title="API endpoints" footer="Connect any OpenAI-compatible, Anthropic, Ollama or Gemini API. Keys stay in the device keychain.">
-        {apiEndpoints.map((e) => (
-          <Row
-            key={e.id}
-            icon="cloud"
-            brand={friendly ? brandOfEndpoint(e) : undefined}
-            title={e.name}
-            detail={
-              friendly
-                ? `${e.models.length} model${e.models.length === 1 ? '' : 's'}`
-                : `${PROVIDER_LABELS[e.type]} · ${e.models.length} model${e.models.length === 1 ? '' : 's'}`
-            }
-            onPress={() => router.push({ pathname: '/settings/endpoint', params: { id: e.id } })}
-          />
-        ))}
-        <Row icon="plus" title="Add endpoint" tint="link" onPress={() => router.push('/settings/endpoint')} />
-      </Section>
-
-      <Section
-        title="Remote backends"
-        footer="Run chats on Hermes or DeepSeek Harness on another computer, with its own tools and memory. Choose one from the chat title when starting a chat."
-      >
-        {remotes.map((b) => (
-          <Row
-            key={b.id}
-            icon="server"
-            brand={friendly ? brandOfBackendKind(b.kind) : undefined}
-            title={b.name}
-            detail={friendly ? friendlyModelName(b.model) || b.model : `${b.kind === 'hermes' ? 'Hermes' : 'DeepSeek Harness'} · ${b.model}`}
-            onPress={() => router.push({ pathname: '/settings/backend', params: { id: b.id } })}
-          />
-        ))}
-        <Row icon="plus" title="Add remote backend" tint="link" onPress={() => router.push('/settings/backend')} />
-      </Section>
-
-      <Section title="Agent" footer="Turn these off for models that don't support tool calling.">
-        <ToggleRow
-          icon="tool"
-          title="Files & code"
-          detail={
-            on === total
-              ? `Work with files and run Python${Platform.OS === 'android' ? ', JavaScript and shell commands' : ' and JavaScript'} on this phone`
-              : `${on} of ${total} tools on`
-          }
-          value={tools}
-          onValueChange={setTools}
-          onPress={() => router.push('/settings/tools')}
-        />
-        <ToggleRow
-          icon="globe"
-          title="Web access"
-          detail={tools ? webDetail(SEARCH_PROVIDERS[searchProvider].label, disabledTools) : 'Needs files & code'}
-          value={web && tools}
-          onValueChange={setWeb}
-          onPress={() => router.push('/settings/search')}
-          disabled={!tools}
-        />
-        <Row icon="folder" title="Workspace files" onPress={() => router.push('/settings/workspace')} />
-      </Section>
-
-      <Section title="Chats">
-        <ToggleRow
-          icon="bookmark"
-          title="Memory"
-          detail={memoryCount ? `${memoryCount} saved memor${memoryCount === 1 ? 'y' : 'ies'}` : 'Remember things about you across chats'}
-          value={memory}
-          onValueChange={setMemory}
-          onPress={() => router.push('/settings/memory')}
-        />
-        <ToggleRow
-          icon="type"
-          title="Generate titles"
-          detail="Ask the model to name each chat after its first reply"
-          value={titleGeneration}
-          onValueChange={setTitleGeneration}
-        />
-        <ToggleRow
-          icon="message-circle"
-          title="Suggested prompts"
-          detail="Show ideas from recent chats, generated at most once every 24 hours"
-          value={suggestions}
-          onValueChange={setSuggestions}
-        />
-        <ToggleRow
-          icon="archive"
-          title="Show archived chats"
-          detail="List archived chats in the sidebar and in projects"
-          value={showArchived}
-          onValueChange={setShowArchived}
-        />
-        <ToggleRow
-          icon="bar-chart-2"
-          title="Context meter"
-          detail="Show how much of the model's context a chat uses"
-          value={contextUsage}
-          onValueChange={setContextUsage}
-        />
-        <ToggleRow
-          icon="zap"
-          title="Decode speed"
-          detail="Show tokens per second under replies"
-          value={decodeSpeed}
-          onValueChange={setDecodeSpeed}
-        />
-        <ToggleRow
-          icon="database"
-          title="Cache hits"
-          detail="Show how much of the prompt the backend had cached"
-          value={cacheHits}
-          onValueChange={setCacheHits}
+      <Section>
+        <Row
+          icon="sliders"
+          title="General"
+          detail="Memory, chat titles, compression and follow-ups"
+          onPress={() => router.push('/settings/general')}
         />
         <Row
-          icon="minimize-2"
-          title="Auto-compression"
-          value={`${compression.trigger}% → ${compression.target}%`}
-          onPress={() => router.push('/settings/context')}
+          icon="cloud"
+          title="Providers"
+          detail={providersDetail(subscriptions, endpoints.length - subscriptions, remotes)}
+          onPress={() => router.push('/settings/providers')}
         />
-      </Section>
-
-      <Section
-        title="Sending during a reply"
-        footer={
-          followUp === 'steer'
-            ? 'Messages join the reply at its next step, so the model can change course mid-task.'
-            : 'Messages wait above the box and go out one by one when the reply is done. Steer any of them in early from there.'
-        }
-      >
-        <View style={styles.segment}>
-          <SegmentedControl options={FOLLOW_UPS} value={followUp} onChange={setFollowUp} />
-        </View>
-      </Section>
-
-      <Section title="Appearance">
-        <View style={styles.segment}>
-          <SegmentedControl options={THEMES} value={theme} onChange={setTheme} />
-        </View>
-        <ToggleRow
-          icon="aperture"
-          title="User-friendly model names"
-          detail="Show provider logos and tidy names instead of long model and provider ids"
-          value={friendly}
-          onValueChange={setFriendly}
+        <Row
+          icon="tool"
+          title="Agent"
+          detail={agentDetail(tools, web, disabledTools)}
+          onPress={() => router.push('/settings/agent')}
         />
+        <Row
+          icon="eye"
+          title="Appearance"
+          detail="Theme, model names and chat details"
+          value={THEME_LABELS[theme]}
+          onPress={() => router.push('/settings/appearance')}
+        />
+        {updatesSupported && (
+          <Row
+            icon="download"
+            title="Updates"
+            detail="Check for new versions of Clanker"
+            value={updatesValue(updateStatus)}
+            onPress={() => router.push('/settings/updates')}
+          />
+        )}
       </Section>
-
-      {updatesSupported && (
-        <Section
-          title="Updates"
-          footer={
-            prereleases
-              ? "New versions come from the app's GitHub releases, including pre-releases: early builds that may be unfinished."
-              : "New versions come from the app's GitHub releases."
-          }
-        >
-          <UpdateRow />
-          <ToggleRow
-            icon="power"
-            title="Check on launch"
-            detail="Look for a new version when Clanker opens, at most once a day"
-            value={checkOnLaunch}
-            onValueChange={setCheckOnLaunch}
-          />
-          <ToggleRow
-            icon="git-branch"
-            title="Include pre-releases"
-            detail="Offer beta builds as well as stable releases"
-            value={prereleases}
-            onValueChange={setPrereleases}
-          />
-        </Section>
-      )}
 
       <Text style={[styles.version, { color: colors.textTertiary }]}>Clanker {Constants.expoConfig?.version ?? ''}</Text>
     </ScrollView>
@@ -307,6 +101,5 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 48 },
-  segment: { padding: 12 },
   version: { textAlign: 'center', fontSize: 13, marginTop: 4 },
 });
