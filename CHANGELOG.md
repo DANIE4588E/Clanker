@@ -1,3 +1,22 @@
+# Clanker 1.3.0-beta.5
+
+## Run models on your phone (experimental)
+- A new **Local** provider in **Settings → Providers** runs **GGUF models on the phone itself** through llama.cpp — no server, no API key, and it keeps working offline.
+- **Browse Hugging Face from the app**: search repos, filter and sort them, and pick a quantization. Split models are grouped into one, auxiliary files are skipped, and a **vision projector** can be downloaded alongside image-capable models.
+- Clanker **checks free storage before downloading** and warns when a model plus its cache would be larger than — or uncomfortably close to — your phone's RAM. Downloads show progress and can be **paused and resumed, even across restarts**; an optional Hugging Face token unlocks gated repos.
+- On-device models stream their replies and support **thinking, images and tool calls** (tools are off by default — the tool prompt is slow on a phone). Each model gets a **context length** slider and a **KV cache type** (F16/Q8_0/Q4_0) with a memory estimate read from the model file; one model loads at a time and requests queue behind it.
+- Chats show **Loading model… N%** and **Reading prompt** while a local model warms up.
+
+## See what you've been spending
+- A new **Usage** page in the sidebar: a **year of daily activity** as a heatmap, **token totals** with the input/output split, and stats for **chats, requests, active days and cache-hit rate** over Today / 7D / 30D / 90D / All.
+- A **Daily tokens** trend stacked per model — tap a day for its breakdown — and a **Breakdown by models or providers** shown as a share bar and list.
+- A compact **activity calendar** now greets you on the new chat screen and opens Usage when tapped; turn it off in Settings → Appearance.
+
+## Fixes
+- The effort slider's glow is no longer cut off along its bottom edge while the keyboard is open.
+
+---
+
 # Clanker 1.3.0-beta.4
 
 ## Subscription usage at a glance
