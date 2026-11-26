@@ -6,8 +6,10 @@ import { leavePlanMode, stopStreaming } from '@/lib/chat';
 import { setCompaction, useCompaction } from '@/lib/compact';
 import * as Haptics from '@/lib/haptics';
 import { clearGoal, pauseGoal, resumeGoal, todoSummary } from '@/lib/planning';
+import { leaveStudyMode } from '@/lib/study';
 import { useTheme } from '@/lib/theme';
 import { useChats, type Todo } from '@/store/chats';
+import { usePlugins } from '@/store/plugins';
 import { useSettings } from '@/store/settings';
 import { composerMargin } from './Composer';
 import { showGoalDetails } from './GoalSheet';
@@ -110,6 +112,10 @@ function Row({
 export function ChatStatus({ conversationId, progress }: { conversationId: string; progress: SharedValue<number> }) {
   const { colors } = useTheme();
   const plan = useChats((s) => s.conversations[conversationId]?.plan);
+  // Study mode counts only while the Study plugin is added.
+  const studyOn = useChats((s) => !!s.conversations[conversationId]?.study);
+  const studyAdded = usePlugins((s) => !!s.installed.study);
+  const study = studyOn && studyAdded;
   const goal = useChats((s) => s.conversations[conversationId]?.goal);
   const todos = useChats((s) => s.conversations[conversationId]?.todos);
   const compaction = useCompaction((s) => s[conversationId]);
@@ -117,7 +123,7 @@ export function ChatStatus({ conversationId, progress }: { conversationId: strin
   const [listOpen, setListOpen] = useState(false);
   const cardStyle = useAnimatedStyle(() => ({ marginHorizontal: composerMargin(progress.value) + INSET }));
 
-  if (!plan && !goal && !todos?.length && !compaction) return null;
+  if (!plan && !study && !goal && !todos?.length && !compaction) return null;
   const tally = todos?.length ? todoSummary(todos) : null;
   const allDone = !!tally && tally.done === tally.total;
   const divider = { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.chromeBorder };
@@ -173,6 +179,22 @@ export function ChatStatus({ conversationId, progress }: { conversationId: strin
         <Text style={[styles.title, { color: colors.text }]}>Plan mode</Text>
         <Text numberOfLines={1} style={[styles.detail, styles.fill, { color: colors.textTertiary }]}>
           Research, then a plan to approve
+        </Text>
+      </Row>
+    );
+  }
+  if (study) {
+    rows.push(
+      <Row
+        key="study"
+        icon="book-open"
+        tint={colors.accentText}
+        label="Study mode: replies teach step by step and test what you know"
+        actions={<Action icon="x" label="Leave study mode" onPress={() => leaveStudyMode(conversationId)} />}
+      >
+        <Text style={[styles.title, { color: colors.text }]}>Study mode</Text>
+        <Text numberOfLines={1} style={[styles.detail, styles.fill, { color: colors.textTertiary }]}>
+          Guided learning, one step at a time
         </Text>
       </Row>
     );

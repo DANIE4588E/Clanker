@@ -1,20 +1,25 @@
 import type Feather from '@expo/vector-icons/Feather';
 import { pluginOfTool, pluginTools } from './plugins/catalog';
 import { splitQuotes } from './quotes';
+import { studyAvailable } from './study';
 
 /**
  * Slash commands: typed at the start of a message, they change how the chat handles it rather
  * than pointing the model at something (see lib/mentions for the rest of what "/" offers).
  */
-export type CommandName = 'goal' | 'plan' | 'compact';
+export type CommandName = 'goal' | 'plan' | 'study' | 'compact';
 
 export type Command = { name: CommandName; description: string; icon: keyof typeof Feather.glyphMap };
 
 export const COMMANDS: Command[] = [
   { name: 'goal', description: 'Set a goal and keep working on it until it’s done', icon: 'target' },
   { name: 'plan', description: 'Research first, then propose a plan for you to approve', icon: 'map' },
+  { name: 'study', description: 'Learn step by step: guided answers, quizzes and flashcards', icon: 'book-open' },
   { name: 'compact', description: 'Summarise the chat so far to free up context', icon: 'minimize-2' },
 ];
+
+/** The commands that work now: /study comes with the Study plugin. */
+export const availableCommands = () => COMMANDS.filter((c) => c.name !== 'study' || studyAvailable());
 
 /** The message's own text, after any quotes picked from the chat (see lib/quotes). */
 const body = (text: string) => splitQuotes(text).text.trim();
@@ -66,6 +71,26 @@ export const isPlanRequest = (text: string) => /^\/plan(?=\s|$)/i.test(body(text
 /** Whether the message only switches plan mode on or off, with nothing to send to the model. */
 export const planControl = (text: string) => {
   const command = planCommand(text);
+  return !!command && ('exit' in command || !command.start);
+};
+
+const END_STUDY = /^(exit|off|cancel|stop|done|end|clear|none|reset|quit)$/i;
+
+/**
+ * What a message starting with /study asks for: study mode on, with what to study if anything
+ * follows (an empty string when nothing does), or, with "off", "exit" and the like, study mode
+ * ended. Null for any other message, and while the Study plugin isn't added.
+ */
+export function studyCommand(text: string): { start: string } | { exit: true } | null {
+  const m = /^\/study(?=\s|$)([\s\S]*)$/i.exec(body(text));
+  if (!m || !studyAvailable()) return null;
+  const topic = m[1].trim();
+  return END_STUDY.test(topic) ? { exit: true } : { start: topic };
+}
+
+/** Whether the message only switches study mode on or off, with nothing to send to the model. */
+export const studyControl = (text: string) => {
+  const command = studyCommand(text);
   return !!command && ('exit' in command || !command.start);
 };
 

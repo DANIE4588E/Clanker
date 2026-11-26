@@ -2,7 +2,7 @@ import type Feather from '@expo/vector-icons/Feather';
 import { useChats, type Conversation } from '@/store/chats';
 import { useLibrary } from '@/store/library';
 import { useSkills } from '@/store/skills';
-import { COMMANDS, goalCommand, planCommand } from './commands';
+import { availableCommands, goalCommand, planCommand, studyCommand } from './commands';
 import { KIND_LABEL, libraryItems, type LibraryItem } from './library';
 import { readChat } from './memory';
 import { PLUGINS, pluginReady, type PluginId } from './plugins/catalog';
@@ -74,6 +74,9 @@ function workspaceOfChat(conversationId: string | null): Workspace | null {
   const project = projectOf(null);
   return project ? projectWorkspace(project.id) : null;
 }
+
+/** Plugins "/" and "@" can name. Study has no tools to point at: /study, a command, stands in for it. */
+const mentionablePlugins = () => PLUGINS.filter((p) => p.id !== 'study' && pluginReady(p));
 
 const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 const baseName = (path: string) => path.split('/').pop() ?? path;
@@ -174,7 +177,7 @@ export function slashSections(commands: boolean): MentionSection[] {
   if (commands) {
     sections.push({
       title: 'Commands',
-      data: COMMANDS.map((c) => ({
+      data: availableCommands().map((c) => ({
         key: `x:${c.name}`,
         kind: 'command',
         label: c.name,
@@ -200,7 +203,7 @@ export function slashSections(commands: boolean): MentionSection[] {
       })
     );
   if (skills.length) sections.push({ title: 'Skills', data: skills });
-  const plugins = PLUGINS.filter(pluginReady).map(
+  const plugins = mentionablePlugins().map(
     (p): MentionOption => ({
       key: `p:${p.id}`,
       kind: 'plugin',
@@ -288,11 +291,11 @@ export function mentionLabels(conversationId: string | null, remote: boolean): M
   );
   if (remote) return { at, slash: [], commands: [] };
   // Plugins still answer to "@" (see resolveMentions).
-  at.push(...PLUGINS.filter(pluginReady).map((p) => p.title));
+  at.push(...mentionablePlugins().map((p) => p.title));
   return {
     at,
     slash: slashSections(false).flatMap((s) => s.data.map((o) => o.label)),
-    commands: COMMANDS.map((c) => c.name),
+    commands: availableCommands().map((c) => c.name),
   };
 }
 
@@ -353,7 +356,7 @@ export function resolveMentions(
     let at: Target[] | null = null;
     let slash: Target[] | null = null;
     const plugins = (): Target[] =>
-      PLUGINS.filter(pluginReady).map((p) => ({ label: p.title, describe: (w) => `- ${w}: use ${p.title} for this.` }));
+      mentionablePlugins().map((p) => ({ label: p.title, describe: (w) => `- ${w}: use ${p.title} for this.` }));
     const atTargets = () => {
       if (at) return at;
       at = [];
@@ -404,6 +407,13 @@ export function resolveMentions(
       "[/plan: Plan mode is on for this chat: the user wants a plan they approve before anything is done. Look into whatever you need to (read files, search, look things up), but change nothing: tools that write files, run code, act in apps or otherwise change things are refused. When you have a concrete plan (the steps, what each one touches, anything the user needs to decide), submit it with exit_plan_mode so they can approve it or ask for changes. If you have no such tool, reply with the plan and ask whether to go ahead.]"
     );
   }
+  const study = studyCommand(text);
+  const studying = !!study && 'start' in study;
+  if (studying) {
+    notes.push(
+      '[/study: Study mode is on for this chat: the user wants to learn, so tutor them rather than hand over answers. Guide them step by step with hints and questions, test one question at a time, help them find their own mistakes, and adapt to how they are doing. The full rules come with the instructions for this chat.]'
+    );
+  }
   const goal = goalCommand(text);
   if (goal && 'goal' in goal) {
     notes.push(
@@ -411,7 +421,7 @@ export function resolveMentions(
     );
   }
   // The command too, as written at the start of the message's own text.
-  const command = /^\/(plan|goal)(?=\s|$)/i.exec(splitQuotes(text).text.trimStart())?.[0];
-  if (command && (planning || (goal && 'goal' in goal))) mentions.push(command);
+  const command = /^\/(plan|goal|study)(?=\s|$)/i.exec(splitQuotes(text).text.trimStart())?.[0];
+  if (command && (planning || studying || (goal && 'goal' in goal))) mentions.push(command);
   return { context: notes.length ? notes.join('\n\n') : undefined, mentions };
 }

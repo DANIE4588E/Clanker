@@ -9,6 +9,7 @@ import { projectSection, workspaceFor } from '../projects';
 import { skillsDiff, skillsFor, skillsSection } from '../skills';
 import { formatSize } from '../workspace';
 import { PLUGINS, pluginTools } from '../plugins/catalog';
+import { isStudying, STUDY_RULES, STUDY_SECTION, studyAvailable } from '../study';
 import { toolOn } from './index';
 
 const FILE_TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'move_path', 'delete_path', 'present_files'];
@@ -220,6 +221,7 @@ export function agentSystemPrompt() {
       '- Charts: a ```chart block holding JSON draws a chart: {"type": "bar" | "hbar" | "line", "title", "labels": [...], "series": [{"name", "values": [...]}], "unit"?, "caption"?}. Use bar to compare amounts (one series, or a few for grouped bars), hbar for rankings or long category names, line for change over time. "unit" is shown with values ("tok/s", "%", "$"); "caption" names the source. At most 8 series, numbers only, null for a gap. The JSON must be valid: no comments or trailing commas.',
       "- Use a table for specs and side-by-side comparisons, a chart when the shape of the numbers is the point, and images when seeing the thing helps. Don't add visuals for their own sake."
     ),
+    studyAvailable() && STUDY_SECTION,
     jobs && jobsSection,
     context && contextSection,
     lines(
@@ -250,7 +252,11 @@ export function systemPrompt(conversationId: string | null, withTools: boolean) 
     withTools && toolOn('skill_view', conversationId)
       ? skillsSection(skillsFor(conversationId), { manage: toolOn('skill_manage', conversationId) })
       : '';
-  const parts = [withTools ? agentSystemPrompt() : '', skills, projectSection(conversationId, withTools), memory].filter(Boolean);
+  // With tools the agent prompt carries the blocks and the context note study mode's rules. Without
+  // tools there is neither, so the blocks ride here while the plugin is added, and the rules too
+  // while study mode is on.
+  const study = withTools || !studyAvailable() ? '' : [STUDY_SECTION, isStudying(conversationId) && STUDY_RULES].filter(Boolean).join('\n\n');
+  const parts = [withTools ? agentSystemPrompt() : '', study, skills, projectSection(conversationId, withTools), memory].filter(Boolean);
   return parts.length ? parts.join('\n\n') : undefined;
 }
 
@@ -310,12 +316,14 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
     plan: conversation.plan ? PLAN_RULES : '',
     goal: conversation.goal ? goalLine(conversation.goal) : '',
     todos: conversation.todos?.length ? todoText(conversation.todos) : '',
+    study: isStudying(opts.conversationId) ? STUDY_RULES : '',
   };
   const stateNew = (key: keyof typeof state) =>
     state[key] !== (earlier.map((u) => notes[u.key]?.[key]).findLast((v) => v != null) ?? '');
   const planNew = stateNew('plan');
   const goalNew = stateNew('goal');
   const todosNew = stateNew('todos');
+  const studyNew = stateNew('study');
 
   const lines = [
     '<context>',
@@ -339,6 +347,7 @@ ${skills}`
         ]
       : []),
     ...(planNew ? [state.plan || 'Plan mode is now off: every tool works again.'] : []),
+    ...(studyNew ? [state.study || 'Study mode is now off: answer normally again.'] : []),
     ...(goalNew ? [state.goal || 'No goal is set now.'] : []),
     ...(todosNew
       ? [state.todos ? `Your todo list now (replaces any earlier one):\n${state.todos}` : 'Your todo list is now empty.']
@@ -353,5 +362,6 @@ ${skills}`
     ...(planNew ? { plan: state.plan } : {}),
     ...(goalNew ? { goal: state.goal } : {}),
     ...(todosNew ? { todos: state.todos } : {}),
+    ...(studyNew ? { study: state.study } : {}),
   });
 }

@@ -6,8 +6,9 @@ import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWork
 import { autoCompress, buildWire, compactEnd, compactHistory, historyOf, historyTokens, unitsOf } from './context';
 import { compactRequest, dismissCompactionError, setCompaction } from './compact';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
-import { compactCommand, goalCommand, goalControl, planCommand, planControl, type GoalCommand } from './commands';
+import { compactCommand, goalCommand, goalControl, planCommand, planControl, studyCommand, studyControl, type GoalCommand } from './commands';
 import { resolveMentions } from './mentions';
+import { enterStudyMode, leaveStudyMode } from './study';
 import { clearGoal, GOAL_IDLE_LIMIT, GOAL_NUDGE, goalActive, goalMaxTurns, goalNudgeContext, isPlanning, pauseGoal, resumeGoal, startGoal } from './planning';
 import { askToNotify, notifyReplyFinished } from './notifications';
 import { workspaceFor, workspaceOf } from './projects';
@@ -130,6 +131,11 @@ function postUserMessage(id: string, text: string, attachments: AttachmentPart[]
   if (planCmd) {
     if ('exit' in planCmd) leavePlanMode(id);
     else enterPlanMode(id);
+  }
+  const studyCmd = studyCommand(text);
+  if (studyCmd) {
+    if ('exit' in studyCmd) leaveStudyMode(id);
+    else enterStudyMode(id);
   }
   const goal = useChats.getState().conversations[id]?.goal;
 
@@ -404,6 +410,17 @@ export function submitMessage(conversationId: string | null, text: string, attac
       if (id) {
         if ('start' in planCmd) enterPlanMode(id);
         else leavePlanMode(id);
+        return id;
+      }
+    }
+    // "/study" on its own turns study mode on, and "/study off" ends it, without sending anything.
+    const studyCmd = studyCommand(text);
+    if (studyCmd && studyControl(text)) {
+      const { active } = useSettings.getState();
+      const id = conversationId ?? (active && 'start' in studyCmd ? useChats.getState().create(active.endpointId, active.model) : null);
+      if (id) {
+        if ('start' in studyCmd) enterStudyMode(id);
+        else leaveStudyMode(id);
         return id;
       }
     }

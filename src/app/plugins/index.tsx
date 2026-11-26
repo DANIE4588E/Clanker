@@ -19,7 +19,7 @@ const STRIP = 5;
 /** Rows a section shows before "›" opens the rest. */
 const PREVIEW = 4;
 
-const CATEGORIES: PluginCategory[] = ['google', 'microsoft', 'productivity', 'business', 'design', 'developer', 'files', 'lifestyle'];
+const CATEGORIES: PluginCategory[] = ['google', 'microsoft', 'productivity', 'learning', 'business', 'design', 'developer', 'files', 'lifestyle'];
 
 /** The plugin store: what's installed, what's popular and new, every category, and search. */
 export default function PluginsScreen() {

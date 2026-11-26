@@ -124,7 +124,7 @@ export function pluginActions(plugin: PluginDef): MenuItem[] {
   const broken = plugin.provider !== 'none' && (!account || account.needsReconnect || !pluginGranted(plugin));
   return [
     ...(broken ? [{ label: 'Reconnect', icon: { feather: 'refresh-cw' as const }, onPress: () => reconnectPlugin(plugin) }] : []),
-    { label: 'Try in chat', icon: { feather: 'message-circle' }, onPress: () => tryInChat(`@${plugin.title} `) },
+    { label: 'Try in chat', icon: { feather: 'message-circle' }, onPress: () => tryInChat(plugin.id === 'study' ? '/study ' : `@${plugin.title} `) },
     { label: 'Details', icon: { feather: 'info' }, onPress: () => router.push({ pathname: '/plugins/plugin', params: { id: plugin.id } }) },
     { label: 'Settings', icon: { feather: 'settings' }, onPress: () => router.push({ pathname: '/plugins/settings', params: { id: plugin.id } }) },
     { label: 'Remove', icon: { feather: 'trash-2' }, destructive: true, separated: true, onPress: () => removePlugin(plugin) },

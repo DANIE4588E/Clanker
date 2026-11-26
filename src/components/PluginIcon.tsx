@@ -59,7 +59,7 @@ export function pluginColor(id: PluginId) {
   if (key) return BRAND_MARKS[key].hex;
   const image = IMAGES[id];
   if (image) return image.color;
-  return id === 'weather' ? '#3B8FE0' : id === 'microsoft-todo' ? '#2564CF' : MS_BLUE;
+  return id === 'weather' ? '#3B8FE0' : id === 'study' ? '#7C5CFA' : id === 'microsoft-todo' ? '#2564CF' : MS_BLUE;
 }
 
 /** Relative luminance of a #rrggbb color, 0 (black) to 1 (white). */
@@ -137,6 +137,15 @@ function Mark({ id, size }: { id: PluginId; size: number }) {
         <Svg {...svg}>
           <Circle cx={9} cy={9} r={4.5} fill="#F6B500" />
           <Path d="M8.5 20a4 4 0 0 1-.4-8 5.5 5.5 0 0 1 10.4 1.7A3.2 3.2 0 0 1 18 20Z" fill="#8FB8E8" />
+        </Svg>
+      );
+    case 'study':
+      return (
+        <Svg {...svg}>
+          <Path d="M12 3.5 1.5 8.5 12 13.5l10.5-5Z" fill="#7C5CFA" />
+          <Path d="M5.5 11v4.6c0 1.6 2.9 3.4 6.5 3.4s6.5-1.8 6.5-3.4V11L12 14.2Z" fill="#A894FF" />
+          <Path d="M21 9.2v6.3" stroke="#7C5CFA" strokeWidth={1.6} strokeLinecap="round" />
+          <Circle cx={21} cy={16.4} r={1.3} fill="#7C5CFA" />
         </Svg>
       );
     default:

@@ -26,7 +26,8 @@ const host = (url: string) => url.replace(/^https?:\/\/(www\.)?/, '').split('/')
 /** Prompts to try, on a card washed in the plugin's color; tapping one starts a chat with it. */
 function Examples({ plugin, ready }: { plugin: PluginDef; ready: boolean }) {
   const color = pluginColor(plugin.id);
-  const tag = `@${plugin.title}`;
+  // Study's prompts start with its command rather than the plugin's name.
+  const tag = plugin.id === 'study' ? '/study' : `@${plugin.title}`;
   const start = (text: string) => {
     if (!ready) return addPlugin(plugin);
     // Prompts ending in ":" want something added (a link, a file), so they wait in the box.
@@ -115,7 +116,14 @@ export default function PluginScreen() {
   const tools = pluginTools(plugin);
   // An MCP server's tools are known only once it's connected; until then assume it can change things.
   const writes = tools.some((t) => t.write) || (isMcpPlugin(plugin) && !tools.length);
-  const capabilities = !writes ? 'Read' : ready && !write ? 'Read only (changes off)' : 'Read and write';
+  const capabilities =
+    plugin.id === 'study'
+      ? 'Study mode, quizzes, flashcards, slides and diagrams'
+      : !writes
+        ? 'Read'
+        : ready && !write
+          ? 'Read only (changes off)'
+          : 'Read and write';
   const provider = PROVIDERS[plugin.provider];
   const mcpOpen = provider.auth.kind === 'mcp' && !!provider.auth.open;
 
@@ -191,7 +199,7 @@ export default function PluginScreen() {
       <View style={[styles.bottom, { paddingBottom: insets.bottom + 12 }]}>
         <EdgeFade solid="bottom" style={StyleSheet.absoluteFill} />
         <Pressable
-          onPress={() => (status === 'absent' ? addPlugin(plugin) : status === 'attention' ? reconnectPlugin(plugin) : tryInChat(`@${plugin.title} `))}
+          onPress={() => (status === 'absent' ? addPlugin(plugin) : status === 'attention' ? reconnectPlugin(plugin) : tryInChat(plugin.id === 'study' ? '/study ' : `@${plugin.title} `))}
           disabled={connecting}
           accessibilityRole="button"
           style={({ pressed }) => [styles.cta, { backgroundColor: colors.text }, pressed && { opacity: 0.8 }]}

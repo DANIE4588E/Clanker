@@ -28,6 +28,7 @@ import { brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { RemoteReply } from './RemoteReply';
 import { areasSelect, SelectionArea } from './SelectionArea';
 import { Markdown } from './Markdown';
+import { ReplyProvider } from './study/shared';
 import { NestedScroll } from './NestedScroll';
 import { PlanCard } from './PlanCard';
 import { QuestionCard } from './QuestionCard';
@@ -734,7 +735,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
 function MessageWithCompaction(props: Props) {
   return (
     <>
-      <MessageBubbleInner {...props} />
+      {/* Study cards in a reply send the user's results back to its chat. */}
+      <ReplyProvider conversationId={props.conversationId}>
+        <MessageBubbleInner {...props} />
+      </ReplyProvider>
       <CompactionMarker conversationId={props.conversationId} messageId={props.message.id} />
     </>
   );

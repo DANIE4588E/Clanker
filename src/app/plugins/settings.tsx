@@ -104,6 +104,16 @@ export default function PluginSettingsScreen() {
               }}
             />
           )}
+          {!tools.length &&
+            plugin.features?.map((f) => (
+              <Row
+                key={f.title}
+                leading={<Feather name={status === 'ready' ? 'check' : 'minus'} size={20} color={status === 'ready' ? colors.accentText : colors.textTertiary} />}
+                title={f.title}
+                detail={f.detail}
+                muted={status !== 'ready'}
+              />
+            ))}
           {tools.map((t) => {
             const allowed = status === 'ready' && (!t.write || write);
             return (

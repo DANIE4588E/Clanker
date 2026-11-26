@@ -30,6 +30,7 @@ export type PluginId =
   | 'dropbox'
   | 'spotify'
   | 'weather'
+  | 'study'
   | 'atlassian'
   | 'miro'
   | 'calendly'
@@ -58,7 +59,7 @@ export type PluginTool = {
   icon?: keyof typeof Feather.glyphMap;
 };
 
-export type PluginCategory = 'google' | 'microsoft' | 'productivity' | 'business' | 'design' | 'developer' | 'files' | 'lifestyle';
+export type PluginCategory = 'google' | 'microsoft' | 'productivity' | 'learning' | 'business' | 'design' | 'developer' | 'files' | 'lifestyle';
 
 export type PluginDef = {
   id: PluginId;
@@ -84,12 +85,15 @@ export type PluginDef = {
   guide: string;
   /** The tools, for plugins that bring their own; MCP plugins get theirs from the server (see pluginTools). */
   tools: PluginTool[];
+  /** What a plugin without tools of its own adds to chats, listed on its settings page. */
+  features?: { title: string; detail: string }[];
 };
 
 export const CATEGORY_TITLES: Record<PluginCategory, string> = {
   google: 'Google Workspace',
   microsoft: 'Microsoft 365',
   productivity: 'Productivity',
+  learning: 'Learning',
   business: 'Business',
   design: 'Design & web',
   developer: 'Developer tools',
@@ -640,6 +644,35 @@ export const PLUGINS: PluginDef[] = [
     ],
     guide: 'Weather: weather_forecast takes a place name or coordinates.',
     tools: [{ name: 'weather_forecast', title: 'Forecasts', detail: 'Current, hourly and daily weather', icon: 'cloud' }],
+  },
+  {
+    id: 'study',
+    provider: 'none',
+    title: 'Study',
+    summary: 'Tutoring, quizzes, flashcards and diagrams',
+    description:
+      'Study lets Clanker make interactive quizzes, flashcards and slides, and draw flowcharts, diagrams, electrical circuits and logic-gate diagrams right in the chat, in any conversation. Turn on study mode with /study when you want a tutor: it guides you to answers instead of handing them over, teaches step by step, tests you one question at a time, helps you find your own mistakes and adapts to how you are doing. Built in, no account needed.',
+    category: 'learning',
+    popular: 0.5,
+    isNew: true,
+    website: 'https://github.com/DANIE4588E/Clanker',
+    scopes: [],
+    examples: [
+      'Draw a flowchart of how a TCP connection is opened',
+      'Draw the circuit for two resistors in parallel with a 9 V battery',
+      'Make flashcards for the main organelles of a cell',
+      '/study Help me with this homework without giving me the answer: solve 2x² − 8x + 6 = 0',
+    ],
+    guide: 'Study: quizzes, flashcards, slides, diagrams and circuits (see Study).',
+    tools: [],
+    features: [
+      { title: 'Study mode', detail: '/study: guided answers, step-by-step teaching, adapts to you' },
+      { title: 'Quizzes', detail: 'One question at a time, with hints, grading and explanations' },
+      { title: 'Flashcards', detail: 'Flip, shuffle and sort into known and still learning' },
+      { title: 'Slides', detail: 'Lesson decks right in the chat, or as PowerPoint files' },
+      { title: 'Diagrams', detail: 'Flowcharts, sequence, state, class, mind maps and timelines' },
+      { title: 'Circuits', detail: 'Electrical schematics and logic-gate diagrams' },
+    ],
   },
   // ---- Hosted MCP servers (sign in with one tap; tools come from the server) ----
   {

@@ -52,7 +52,10 @@ const catalog = {
   pluginOfTool: (name) => (name in pluginTools ? plugins[0] : undefined),
   pluginTools: () => Object.entries(pluginTools).map(([name, write]) => ({ name, write })),
 };
-const commands = load('commands.ts', { './plugins/catalog': catalog, './quotes': quotes });
+// The Study plugin, which brings /study, is off unless a test adds it.
+let studyAdded = false;
+const study = { studyAvailable: () => studyAdded };
+const commands = load('commands.ts', { './plugins/catalog': catalog, './quotes': quotes, './study': study });
 const mentions = load('mentions.ts', {
   '@/store/chats': { useChats: { getState: () => ({ conversations }) } },
   '@/store/library': { useLibrary: { getState: () => ({ deleted: {}, purged: {} }) } },
@@ -119,7 +122,7 @@ test('remote chats offer only Library files', () => {
 });
 
 test('"/" offers commands only at the start, then skills and plugins', () => {
-  assert.deepEqual(titles(mentions.slashSections(true)), ['/goal', '/plan', '/pdf-tools', '/Gmail']);
+  assert.deepEqual(titles(mentions.slashSections(true)), ['/goal', '/plan', '/compact', '/pdf-tools', '/Gmail']);
   assert.deepEqual(titles(mentions.slashSections(false)), ['/pdf-tools', '/Gmail']);
   assert.deepEqual(titles(mentions.filterSections(mentions.slashSections(true), 'G')), ['/goal', '/Gmail']);
   assert.equal(mentions.atStart('  /plan', 2), true);
@@ -196,6 +199,32 @@ test('cuts text into plain runs and mentions', () => {
 test('adds the /plan and /goal instructions', () => {
   assert.match(mentions.resolveMentions('current', '/plan rename the files').context, /^\[\/plan: Plan mode is on for this chat/);
   assert.match(mentions.resolveMentions('current', '/goal Get every test passing').context, /The user set a goal for this chat: "Get every test passing"/);
+});
+
+test('/study comes with the Study plugin, which it stands in for', () => {
+  const plugins0 = plugins.slice();
+  plugins.push({ id: 'study', title: 'Study', summary: 'Tutoring' });
+  try {
+    assert.equal(commands.studyCommand('/study fractions'), null);
+    assert.ok(!titles(mentions.slashSections(true)).includes('/study'));
+    studyAdded = true;
+    const offered = titles(mentions.slashSections(true));
+    assert.ok(offered.includes('/study'));
+    assert.ok(!offered.includes('/Study'), 'the plugin itself is not offered next to its command');
+    assert.deepEqual(commands.studyCommand('/study fractions'), { start: 'fractions' });
+    assert.deepEqual(commands.studyCommand('/Study'), { start: '' });
+    assert.deepEqual(commands.studyCommand('/study off'), { exit: true });
+    assert.equal(commands.studyCommand('let us /study'), null);
+    assert.equal(commands.studyControl('/study'), true);
+    assert.equal(commands.studyControl('/study exit'), true);
+    assert.equal(commands.studyControl('/study photosynthesis'), false);
+    const resolved = mentions.resolveMentions('current', '/study the Krebs cycle');
+    assert.match(resolved.context, /^\[\/study: Study mode is on for this chat/);
+    assert.deepEqual(resolved.mentions, ['/study']);
+  } finally {
+    studyAdded = false;
+    plugins.splice(0, plugins.length, ...plugins0);
+  }
 });
 
 // ---- commands --------------------------------------------------------------------------------

@@ -102,6 +102,8 @@ export interface ContextNote {
   plan?: string;
   goal?: string;
   todos?: string;
+  /** Study mode's rules as the note showed them (empty: off); shown only when they changed. */
+  study?: string;
 }
 
 /** A message the user sent while a reply was running, waiting to go out. */
@@ -163,6 +165,8 @@ export interface Conversation {
   goal?: Goal;
   /** Set while the chat is in plan mode: replies only look into the task, then propose a plan. */
   plan?: PlanMode;
+  /** Set while the chat is in study mode: replies tutor and guide rather than hand over answers (see lib/study). */
+  study?: StudyMode;
   /** The agent's todo list for the task in hand (see the todo_write tool). */
   todos?: Todo[];
 }
@@ -188,6 +192,11 @@ export interface Goal {
 
 /** Plan mode (see lib/chat and lib/tools/planning): the chat researches and proposes before anything changes. */
 export interface PlanMode {
+  startedAt: number;
+}
+
+/** Study mode (see lib/study): the chat teaches step by step and tests understanding. */
+export interface StudyMode {
   startedAt: number;
 }
 
@@ -242,6 +251,8 @@ interface ChatsState {
   setGoal: (id: string, goal: Goal | undefined) => void;
   /** Puts the chat in plan mode, or with undefined, takes it out. */
   setPlan: (id: string, plan: PlanMode | undefined) => void;
+  /** Puts the chat in study mode, or with undefined, takes it out. */
+  setStudy: (id: string, study: StudyMode | undefined) => void;
   /** Replaces the chat's todo list; undefined or an empty list clears it. */
   setTodos: (id: string, todos: Todo[] | undefined) => void;
   /** Records file signatures as seen by the model; null forgets a path. */
@@ -447,6 +458,7 @@ export const useChats = create<ChatsState>()(
         setSkillBase: (id, skillBase) => patchConversation(id, () => ({ skillBase })),
         setGoal: (id, goal) => patchConversation(id, () => ({ goal })),
         setPlan: (id, plan) => patchConversation(id, () => ({ plan })),
+        setStudy: (id, study) => patchConversation(id, () => ({ study })),
         setTodos: (id, todos) => patchConversation(id, () => ({ todos: todos?.length ? todos : undefined })),
         observe: (id, entries) =>
           patchConversation(id, (c) => {

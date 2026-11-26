@@ -1,4 +1,4 @@
-import { cloneElement, Fragment, isValidElement, memo, useMemo, useState, type ReactNode } from 'react';
+import { cloneElement, Fragment, isValidElement, memo, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Alert, StyleSheet, Text, View, type ImageStyle, type TextStyle, type ViewStyle } from 'react-native';
 import { MarkedLexer, Renderer, useMarkdown, type MarkedStyles } from 'react-native-marked';
 import { FileMentions } from '@/lib/fileMentions';
@@ -14,7 +14,20 @@ import { MarkdownTable } from './MarkdownTable';
 import { InlineMath, MathBlock } from './MathView';
 import { SelectionArea, useSelectable } from './SelectionArea';
 import { useFadeNodes } from './StreamFade';
+import { Circuit, parseCircuit } from './study/Circuit';
+import { Diagram } from './study/Diagram';
+import { Flashcards, parseFlashcards } from './study/Flashcards';
+import { parseQuiz, Quiz } from './study/Quiz';
+import { parseSlides, Slides } from './study/Slides';
 import { SKIP_SELECTION } from '../../modules/clanker-selection';
+
+/** The study plugin's blocks (see lib/study), by their fence's language. */
+const STUDY_BLOCKS = new Map<string, { parse: (text: string) => unknown; Card: ComponentType<{ source: string }>; pending: string }>([
+  ['quiz', { parse: parseQuiz, Card: Quiz, pending: 'Writing quiz…' }],
+  ['flashcards', { parse: parseFlashcards, Card: Flashcards, pending: 'Making flashcards…' }],
+  ['slides', { parse: parseSlides, Card: Slides, pending: 'Making slides…' }],
+  ['circuit', { parse: parseCircuit, Card: Circuit, pending: 'Drawing circuit…' }],
+]);
 
 /** Shown in place of a chart or image block whose JSON is still streaming in. */
 function Pending({ label }: { label: string }) {
@@ -95,6 +108,26 @@ class ChatRenderer extends Renderer {
         );
       }
       if (this.live) return <Pending key={this.getKey()} label="Loading images…" />;
+    } else if (lang && STUDY_BLOCKS.has(lang)) {
+      const block = STUDY_BLOCKS.get(lang)!;
+      // Study cards keep the user's progress, so they appear only once their JSON is whole.
+      if (block.parse(text)) {
+        const Card = block.Card;
+        return (
+          <View key={this.getKey()} nativeID={SKIP_SELECTION}>
+            <Card source={text} />
+          </View>
+        );
+      }
+      if (this.live) return <Pending key={this.getKey()} label={block.pending} />;
+    } else if (lang === 'mermaid') {
+      // Mermaid can't be checked until it's drawn, so it waits for the block to close.
+      if (this.live) return <Pending key={this.getKey()} label="Drawing diagram…" />;
+      return (
+        <View key={this.getKey()} nativeID={SKIP_SELECTION}>
+          <Diagram source={text.trim()} />
+        </View>
+      );
     }
     return <CodeBlock key={this.getKey()} code={text} language={language} streaming={this.live} findable />;
   }
