@@ -74,6 +74,8 @@ type Props = {
   /** The box holds an edit of an earlier message; sending sends the edit. */
   editing?: boolean;
   onCancelEdit?: () => void;
+  /** Takes the box off the screen (finding in the chat, a dialog asking for text) and keeps what it holds. */
+  hidden?: boolean;
 };
 
 /**
@@ -97,6 +99,7 @@ export function ComposerDock({
   onChangeAttachments,
   editing = false,
   onCancelEdit,
+  hidden = false,
 }: Props) {
   const { colors } = useTheme();
   const [ownAttachments, setOwnAttachments] = useState<AttachmentPart[]>([]);
@@ -208,6 +211,11 @@ export function ComposerDock({
     }
   };
 
+  // Hidden while typing in it, the box lets go of the keyboard for whatever hid it.
+  useEffect(() => {
+    if (hidden) input.current?.blur();
+  }, [hidden]);
+
   const panelBottom = keyboardVisible ? keyboard.height + 8 : Math.max(insets.bottom, 8);
   const bottomPad = keyboardVisible ? 8 : Math.max(insets.bottom, 8);
 
@@ -216,14 +224,15 @@ export function ComposerDock({
       {/* Floats over the bottom of the content; what scrolls under it fades out into the
           background instead of being cut off at a hard edge. */}
       <View
-        pointerEvents="box-none"
+        pointerEvents={hidden ? 'none' : 'box-none'}
         onLayout={(e) => {
+          if (hidden) return;
           // Mid-animation sizes race the UI thread; the layout after it settles is exact.
           const p = progress.get();
           if (p > 0 && p < 1) return;
           onBaseHeight(Math.round(e.nativeEvent.layout.height - composerGrowth(p)));
         }}
-        style={[styles.area, { paddingBottom: bottomPad }]}
+        style={[styles.area, { paddingBottom: bottomPad }, hidden && styles.hidden]}
       >
         <EdgeFade solid="bottom" style={StyleSheet.absoluteFill} />
         {/* Faded out rather than unmounted while the slider is up, so attached images survive,
@@ -317,6 +326,7 @@ export function ComposerDock({
 }
 
 const styles = StyleSheet.create({
+  hidden: { display: 'none' },
   area: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: COMPOSER_FADE },
   // The overlay host is stretched to the full screen by its native side; children fill it.
   overlay: { flex: 1 },

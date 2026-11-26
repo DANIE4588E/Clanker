@@ -9,6 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { ChatHeader } from '@/components/ChatHeader';
 import { chatScreenActions } from '@/components/ChatMenu';
 import { ContextMenu, type MenuAnchor } from '@/components/ContextMenu';
+import { usePromptOpen } from '@/components/Dialogs';
 import { FindBar } from '@/components/FindBar';
 import { composerGrowth } from '@/components/Composer';
 import { COMPOSER_FADE, ComposerDock } from '@/components/ComposerDock';
@@ -110,6 +111,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   // or a new one, closes it); `find` is what it marks in the messages and the one it shows.
   const [findIn, setFindIn] = useState<string | null>(null);
   const finding = !!currentId && findIn === currentId;
+  const promptOpen = usePromptOpen();
   const [find, setFind] = useState<{ needle: string; focusId: string | null } | null>(null);
   const closeFind = useCallback(() => {
     setFindIn(null);
@@ -123,8 +125,10 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   const [composerBase, setComposerBase] = useState(0);
   const composerProgress = useSharedValue(0);
   const topInset = headerHeight - HEADER_FADE;
-  const bottomInset = useDerivedValue(() =>
-    Math.max(composerBase + composerGrowth(composerProgress.value) - COMPOSER_FADE, 0)
+  // Finding in the chat hides the composer, so the conversation runs down to the screen's bottom.
+  const bottomInset = useDerivedValue(
+    () => (finding ? insets.bottom : Math.max(composerBase + composerGrowth(composerProgress.value) - COMPOSER_FADE, 0)),
+    [finding, composerBase, insets.bottom]
   );
   const emptyInsetStyle = useAnimatedStyle(() => ({ paddingBottom: bottomInset.value }));
 
@@ -332,6 +336,9 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             onChangeAttachments={setAttachments}
             editing={!!editing && editing.chatId === currentId}
             onCancelEdit={() => endEdit(false)}
+            // A text dialog (naming a new project, say) raises the keyboard, which would lift the
+            // box above the dialog's backdrop.
+            hidden={finding || promptOpen}
           />
         </View>
       </KeyboardAvoidingView>

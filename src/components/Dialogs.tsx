@@ -56,6 +56,9 @@ export const notify = (title: string, message?: string) =>
 export const prompt = (opts: Omit<Prompt, 'kind'>) => show({ kind: 'prompt', ...opts });
 export const choose = (opts: Omit<Choose, 'kind'>) => show({ kind: 'choose', ...opts });
 
+/** True while a dialog asking for text is up, with the keyboard open for it. */
+export const usePromptOpen = () => useDialogs((s) => s.dialog?.kind === 'prompt');
+
 /** Mount once, at the root, above every screen. */
 export function DialogHost() {
   const { colors } = useTheme();
