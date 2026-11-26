@@ -11,7 +11,18 @@ import { parsePartialJson } from './partialJson';
 import { firstLine } from './quotes';
 import { ensureSkillBase } from './skills';
 import { reviewSkills, shouldReviewSkills } from './skills/review';
-import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type ContentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
+import {
+  getAdapter,
+  isSubscriptionType,
+  ProviderError,
+  type AttachmentPart,
+  type ContentPart,
+  type Endpoint,
+  type StreamResult,
+  type ToolCallDraft,
+  type ToolPart,
+  type WireMessage,
+} from './providers';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
 import { apiKeys, flushJsonStorage, uid } from './storage';
@@ -24,6 +35,26 @@ import { systemPrompt, writeContextNote } from './tools/prompt';
 import { chatWorkspace } from './workspace';
 
 const controllers = new Map<string, AbortController>();
+/** Running replies' "answer now" hooks, by chat (see answerNow). */
+const wrapUps = new Map<string, () => void>();
+
+const ANSWER_NOW =
+  '[The user pressed "Answer now". Stop working: make no more tool calls, and answer the user directly from what you have ' +
+  'found and done so far. Where something is still unchecked or unfinished, say so briefly.]';
+
+/** The history with the request to answer now at its end, on the newest turn rather than a turn of its own. */
+function withAnswerNow(messages: WireMessage[]): WireMessage[] {
+  const last = messages[messages.length - 1];
+  const rest = messages.slice(0, -1);
+  if (last?.role === 'tool' && last.results?.length) {
+    const results = [...last.results];
+    const r = results[results.length - 1];
+    results[results.length - 1] = { ...r, output: `${r.output}\n\n${ANSWER_NOW}` };
+    return [...rest, { ...last, results }];
+  }
+  if (last?.role === 'user') return [...rest, { ...last, text: `${last.text}\n\n${ANSWER_NOW}` }];
+  return [...messages, { role: 'user', text: ANSWER_NOW, images: [] }];
+}
 
 // Batch tokens so the store (and the markdown re-render) updates at most ~25 times a second.
 const FLUSH_MS = 40;
@@ -240,6 +271,14 @@ export function continueReply(conversationId: string) {
   void runCompletion(conversationId, { resumeMessageId: last.id });
 }
 
+/**
+ * Has the running reply stop what it's doing (the response it's writing, the tool call it's
+ * running) and answer right away from what it has found so far, with no more tool calls.
+ */
+export function answerNow(conversationId: string) {
+  wrapUps.get(conversationId)?.();
+}
+
 export function stopStreaming(conversationId: string) {
   if (isRemoteChat(conversationId)) return stopRemoteChat(conversationId);
   controllers.get(conversationId)?.abort();
@@ -352,6 +391,17 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
 
   const controller = new AbortController();
   controllers.set(id, controller);
+  // "Answer now" cuts the step under way short with its own signal (Stop aborts it too). One last
+  // response then answers from what the reply has, at the lowest effort, its tool calls ignored.
+  let wrapUp = false;
+  let stepController = new AbortController();
+  controller.signal.addEventListener('abort', () => stepController.abort());
+  wrapUps.set(id, () => {
+    if (wrapUp || controller.signal.aborted) return;
+    wrapUp = true;
+    useChats.getState().updateMessage(id, replyId, { answerNow: true });
+    stepController.abort();
+  });
   void askToNotify();
   let buffer = '';
   let reasoningBuffer = '';
@@ -419,7 +469,7 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
     if (!steers.length) return false;
     const chats = useChats.getState();
     chats.setQueue(id, queue.filter((m) => !m.steer));
-    chats.updateMessage(id, replyId, { status: 'done' });
+    chats.updateMessage(id, replyId, { status: 'done', answerNow: undefined });
     postUserMessage(
       id,
       steers.map((m) => m.text).filter(Boolean).join('\n\n'),
@@ -459,6 +509,13 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       // What changes between steps (time, workspace, jobs) goes after the newest history item and
       // stays there, so the system prompt and earlier history are a stable, cacheable prefix.
       if (tools) writeContextNote({ conversationId: id, replyId, budget });
+      // The response that answers now, once asked for; a step started before that gets cut short.
+      const final = wrapUp;
+      stepController = new AbortController();
+      const stepSignal = final ? controller.signal : stepController.signal;
+      // Where this step's parts begin, so a step cut short can take back its half-written text.
+      const partsBefore = reply()?.content.length ?? 0;
+      let answered = false;
       let streamed = false;
       // For timing the response's decode where the server doesn't: from its first chunk to its end.
       let firstChunkAt = 0;
@@ -468,20 +525,24 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
         firstChunkAt ||= Date.now();
         streamedChars += chars;
       };
-      let result;
+      let result: StreamResult | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
+          const messages = await buildMessages();
           result = await getAdapter(endpoint.type).stream({
             endpoint,
             apiKey,
             model: conversation.model,
-            effort: effort?.level,
+            // Answering now shouldn't mean a long think first.
+            effort: final && effort ? endpoint.efforts?.[conversation.model]?.[0] ?? effort.level : effort?.level,
             system,
+            // Still offered when answering now: some APIs refuse tool calls in the history without them.
             tools,
-            messages: await buildMessages(),
-            signal: controller.signal,
+            messages: final ? withAnswerNow(messages) : messages,
+            signal: stepSignal,
             onToken: (token) => {
               chunk(token.length);
+              answered ||= !!token.trim();
               markThoughtDone();
               buffer += token;
               timer ??= setTimeout(flush, FLUSH_MS);
@@ -504,6 +565,8 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
           });
           break;
         } catch (e) {
+          // Cut short to answer now; the answer follows as the next response.
+          if (!final && wrapUp && !controller.signal.aborted) break;
           // Over the model's real window (the budget is only an estimate): compress harder and retry.
           const retry =
             attempt < 3 &&
@@ -516,13 +579,30 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       }
       flush();
       markThoughtDone();
+      if (!result) {
+        // The step's thoughts stay; its unfinished calls go, and so does text the answer will replace.
+        settleDrafts([]);
+        const content = reply()?.content ?? [];
+        useChats
+          .getState()
+          .updateMessage(id, replyId, { content: content.filter((p, i) => i < partsBefore || p.type !== 'text') });
+        continue;
+      }
+      if (final) {
+        // Calls made anyway are dropped: the reply ends here.
+        settleDrafts([]);
+        if (!answered) interrupted = 'Stopped without an answer';
+        const stats = stepStats(result.usage, streamedChars, firstChunkAt ? Date.now() - firstChunkAt : 0);
+        if (stats) recordStep(id, replyId, stats);
+        break;
+      }
       const toolChars = result.toolCalls.reduce((n, c) => n + c.name.length + JSON.stringify(c.input).length, 0);
       const stats = stepStats(result.usage, streamedChars + toolChars, firstChunkAt ? Date.now() - firstChunkAt : 0);
       if (stats) recordStep(id, replyId, stats);
       if (!tools || !result.toolCalls.length) {
         settleDrafts([]);
-        // Rounds count per reply, and a steered one starts over.
-        if (steer()) {
+        // Rounds count per reply, and a steered one starts over. An answer asked for as it finished stands.
+        if (!wrapUp && steer()) {
           step = 0;
           continue;
         }
@@ -553,10 +633,10 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       settleDrafts(calls);
       // One at a time: calls in a batch often depend on each other's files.
       for (const call of calls) {
-        if (controller.signal.aborted) break;
+        if (stepSignal.aborted) break;
         const started = Date.now();
         const outcome = await executeTool(call, {
-          signal: controller.signal,
+          signal: stepSignal,
           conversationId: id,
           messageId: replyId,
           step: stepId,
@@ -572,9 +652,18 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
         });
       }
       if (controller.signal.aborted) throw new Error('Stopped');
+      if (wrapUp) {
+        // Calls the answer cut off before they ran stay in the history as not run.
+        for (const call of calls) {
+          if (reply()?.content.some((p) => p.type === 'tool' && p.id === call.id && p.status === 'running')) {
+            useChats.getState().patchTool(id, replyId, call.id, { status: 'error', output: 'Not run: the user asked for an answer now.' });
+          }
+        }
+        continue;
+      }
       if (steer()) step = 0;
     }
-    useChats.getState().updateMessage(id, replyId, { status: 'done', error: undefined, interrupted });
+    useChats.getState().updateMessage(id, replyId, { status: 'done', error: undefined, interrupted, answerNow: undefined });
   } catch (e) {
     flush();
     markThoughtDone();
@@ -585,6 +674,7 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
         content,
         error: undefined,
         interrupted: 'Stopped by user',
+        answerNow: undefined,
       });
     } else {
       const error = e instanceof Error ? e.message : String(e);
@@ -593,6 +683,7 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
         error,
         interrupted: undefined,
         content,
+        answerNow: undefined,
       });
       void notifyReplyFinished(id, replyId);
       return;
@@ -600,6 +691,7 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
   } finally {
     if (timer) clearTimeout(timer);
     controllers.delete(id);
+    wrapUps.delete(id);
     endPhoneRun(id, controller.signal.aborted);
     // Steers that never reached a step boundary wait in the queue like any other message.
     const queue = queueOf(id);

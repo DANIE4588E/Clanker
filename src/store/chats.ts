@@ -23,6 +23,8 @@ export interface Message {
   error?: string;
   /** Reason the reply stopped early (user stopped, step limit, app closed). */
   interrupted?: string;
+  /** Set while a running reply wraps up to answer from what it has (see answerNow in lib/chat). */
+  answerNow?: true;
   model?: string;
   /** Thinking from replies saved before thoughts became `thought` content parts. */
   reasoning?: string;

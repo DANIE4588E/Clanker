@@ -8,6 +8,7 @@ import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import { attachmentUri } from '@/lib/attachments';
+import { answerNow } from '@/lib/chat';
 import type { ContentPart, FilePart, ImagePart, ToolPart } from '@/lib/providers';
 import { splitQuotes } from '@/lib/quotes';
 import { sitesOf, sourcesOf } from '@/lib/sources';
@@ -484,6 +485,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           (ms, s) => ms + (s.kind === 'tool' ? (s.part.durationMs ?? 0) : s.kind === 'thought' ? (s.ms ?? 0) : 0),
           0
         );
+  // Once the model has thought or called tools, and until its answer is coming, it can be told to
+  // answer from what it has. Local chats only (remote ones have no onRegenerate).
+  const canAnswerNow =
+    working && !!onRegenerate && segments.some((s) => s.kind !== 'text') && (split ? true : lastSeg?.kind !== 'text');
   const sources = message.status === 'done' ? sourcesOf(message.content) : [];
   // Gathered at the end of the turn, since the calls that made them fold away with the work.
   const made = streaming ? [] : filesOf(message.content);
@@ -538,6 +543,34 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           label={activity}
           onToggle={() => {}}
         />
+      )}
+      {canAnswerNow && (
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            answerNow(conversationId);
+          }}
+          disabled={!!message.answerNow}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel="Answer now"
+          accessibilityHint="Stops the work and answers from what it has found so far"
+          accessibilityState={{ disabled: !!message.answerNow }}
+          style={({ pressed }) => [
+            styles.answerNow,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+            (pressed || !!message.answerNow) && { opacity: 0.6 },
+          ]}
+        >
+          {message.answerNow ? (
+            <ActivityIndicator size="small" color={colors.textSecondary} style={styles.stepSpinner} />
+          ) : (
+            <Feather name="fast-forward" size={13} color={colors.text} />
+          )}
+          <Text style={[styles.answerNowText, { color: message.answerNow ? colors.textSecondary : colors.text }]}>
+            {message.answerNow ? 'Answering…' : 'Answer now'}
+          </Text>
+        </Pressable>
       )}
       {!!made.length && <TurnFiles files={made} text={messageText(message)} />}
       {!onRegenerate && <RemoteReply chatId={conversationId} reply={message.remote} reconnect={!!message.error} />}
@@ -728,4 +761,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
+  answerNow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 6,
+  },
+  answerNowText: { fontSize: 13, fontWeight: '500' },
 });
