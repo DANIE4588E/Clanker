@@ -60,6 +60,7 @@
     "lint": "expo lint",
     "test:remote": "node --test scripts/test-remote-*.mjs",
     "test:subscriptions": "node --test scripts/test-subscriptions.mjs",
+    "test:mentions": "node --test scripts/test-mentions.mjs",
     "test:plugins": "node --test scripts/test-google-plugin.mjs scripts/test-plugin-catalog.mjs scripts/test-plugin-auth.mjs scripts/test-plugin-mcp.mjs",
     "build:apk": "node scripts/build-apk.mjs"
   },

@@ -52,7 +52,8 @@ export function historyOf(conversation: Conversation, replyId?: string) {
 function userTokens(m: Message) {
   let n = tokensOf(messageText(m));
   for (const p of m.content) {
-    if (p.type === 'image') n += IMAGE_TOKENS;
+    if (p.type === 'text' && p.context) n += tokensOf(p.context);
+    else if (p.type === 'image') n += IMAGE_TOKENS;
     else if (p.type === 'file') n += p.text != null ? tokensOf(p.text) : Math.max(1000, Math.round((p.size ?? 0) / 50));
   }
   return n;
@@ -153,7 +154,11 @@ async function userToWire(unit: Unit, opts: WireOptions): Promise<WireMessage> {
   const files: NonNullable<WireMessage['files']> = [];
   let text = unit.text;
   for (const part of message.content) {
-    if (part.type === 'image') {
+    // What the message's @mentions and /commands point at, worked out when it was sent.
+    if (part.type === 'text' && part.context) text += `
+
+${part.context}`;
+    else if (part.type === 'image') {
       const base64 = await opts.readBase64(part.file);
       // A missing attachment file sends the text alone rather than failing the request.
       if (base64) images.push({ base64, mimeType: part.mimeType });

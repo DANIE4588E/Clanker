@@ -16,13 +16,18 @@ import { OverlayPortal } from '@/components/OverlayHost';
 import type { Colors } from '@/lib/theme';
 import { useTheme } from '@/lib/theme';
 
-export type AttachAction = 'camera' | 'photos' | 'files';
+export type AttachAction = 'camera' | 'photos' | 'files' | 'plugins';
 
-const ITEMS: { key: AttachAction; icon: 'camera' | 'image' | 'paperclip'; label: string }[] = [
+type Icon = keyof typeof Feather.glyphMap;
+
+const ITEMS: { key: AttachAction; icon: Icon; label: string }[] = [
   { key: 'camera', icon: 'camera', label: 'Camera' },
   { key: 'photos', icon: 'image', label: 'Photos' },
   { key: 'files', icon: 'paperclip', label: 'Files' },
 ];
+
+// Connected plugins, for browsing without typing "/" (see MentionMenu).
+const SLASH_ITEMS: { key: AttachAction; icon: Icon; label: string }[] = [{ key: 'plugins', icon: 'grid', label: 'Plugins' }];
 
 // Enter: strong ease-out so the card feels instant; exit: shorter, dismissal should be snappy.
 const ENTER = { duration: 220, easing: Easing.bezier(0.23, 1, 0.32, 1) };
@@ -38,6 +43,8 @@ type Props = {
   bottom: number;
   onPick: (action: AttachAction) => void;
   onClose: () => void;
+  /** Also lists plugins. */
+  slash?: boolean;
 };
 
 /**
@@ -48,7 +55,7 @@ type Props = {
  * floats above the composer (which already clears the keyboard), an in-window overlay paints
  * unclipped over the whole screen while leaving the keyboard exactly where it is.
  */
-export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
+export function AttachmentMenu({ visible, x, bottom, onPick, onClose, slash = false }: Props) {
   const { colors } = useTheme();
   const reduceMotion = useReducedMotion();
   // Stay mounted through the exit animation; unmount only when it has played out.
@@ -92,6 +99,9 @@ export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
   }));
 
   if (!mounted) return null;
+  const rows = slash ? [...ITEMS, ...SLASH_ITEMS] : ITEMS;
+  // A longer menu cascades faster, so its last row still starts in time to finish with the card.
+  const stagger = Math.min(ROW_STAGGER, 0.45 / Math.max(1, rows.length - 1));
   return (
     <OverlayPortal>
       {/* Transparent: it only catches taps outside the card. No dimming, like the reference. */}
@@ -106,12 +116,12 @@ export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
         style={[styles.anchor, { bottom, left: x }, cardStyle]}
       >
         <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          {ITEMS.map((item, i) => (
+          {rows.map((item, i) => (
             <Row
               key={item.key}
               label={item.label}
               icon={item.icon}
-              index={i}
+              start={i * stagger}
               open={open}
               reduceMotion={!!reduceMotion}
               onPress={() => {
@@ -133,15 +143,16 @@ export function AttachmentMenu({ visible, x, bottom, onPick, onClose }: Props) {
 function Row({
   label,
   icon,
-  index,
+  start,
   open,
   reduceMotion,
   onPress,
   colors,
 }: {
   label: string;
-  icon: 'camera' | 'image' | 'paperclip';
-  index: number;
+  icon: Icon;
+  /** Where on the master progress this row starts coming in. */
+  start: number;
   open: SharedValue<number>;
   reduceMotion: boolean;
   onPress: () => void;
@@ -149,7 +160,6 @@ function Row({
 }) {
   // Each row rides the master progress a little later: a light cascade, no extra timers,
   // and closing mid-cascade still retargets.
-  const start = index * ROW_STAGGER;
   const style = useAnimatedStyle(() => ({
     opacity: interpolate(open.value, [start, Math.min(start + 0.55, 1)], [0, 1], Extrapolation.CLAMP),
     transform: [
@@ -204,7 +214,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 4,
   },
-  rowPressed: { opacity: 0.6, transform: [{ scale: 0.97 }] },
-  iconCircle: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  rowPressed: { opacity: 0.6, transform: [{ scale: 0.97 }] },  iconCircle: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   label: { fontSize: 17, fontWeight: '500' },
 });

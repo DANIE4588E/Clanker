@@ -1,11 +1,26 @@
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
-import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type HostInstance, type TextInputInstance } from 'react-native';
 import Animated, { Easing, interpolate, useAnimatedStyle, withTiming, type SharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AttachmentMenu, type AttachAction } from '@/components/AttachmentMenu';
+import { MentionMenu } from '@/components/MentionMenu';
 import { attachmentUri, deleteAttachment, pickFiles, pickImages } from '@/lib/attachments';
+import { goalClear } from '@/lib/commands';
+import { attachmentFor, type LibraryItem } from '@/lib/library';
+import {
+  atSections,
+  atStart,
+  filterSections,
+  mentionLabels,
+  mentionSpans,
+  mentionTrigger,
+  SLASH_KINDS,
+  slashSections,
+  type MentionOption,
+} from '@/lib/mentions';
 import { CONTEXT_METER_WIDTH, ContextMeter, ContextPopover } from '@/components/ContextUsage';
 import { EFFORT_METER_EXTENT, EffortMeter } from '@/components/EffortMeter';
 import { FileIcon } from '@/components/FileIcon';
@@ -14,6 +29,7 @@ import { QUOTA_METER_WIDTH, QuotaMeter, QuotaPopover, quotaMeterLabel } from '@/
 import type { AttachmentPart, FilePart, ImagePart } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import type { ContextUsage } from '@/lib/usage';
+import { useChats } from '@/store/chats';
 import type { SubscriptionQuota } from '@/lib/useSubscriptionQuota';
 
 // The composer is a one-line pill while the keyboard is down and a two-row box (text above,
@@ -37,6 +53,10 @@ const EFFORT_INSET = (BUTTON - EFFORT_METER_EXTENT) / 2;
 const STOP_INSET = (BUTTON - 12) / 2;
 // Empty space inside the attach button beside its plus (24pt Feather glyph: 14pt of lines plus round caps).
 const ATTACH_INSET = (BUTTON - 16) / 2;
+
+// The mention list's tallest, and the room it keeps from the top of the screen.
+const MENTION_MAX_HEIGHT = 320;
+const MENTION_TOP_ROOM = 16;
 
 /** Padding a meter needs on one side to sit ICON_SPACING from a neighbour with `neighbourInset`. */
 const roomBeside = (neighbourInset: number) => Math.max(0, ICON_SPACING - TOOLBAR_GAP - neighbourInset);
@@ -81,6 +101,10 @@ type Props = {
   /** Expansion, 0 collapsed to 1 expanded. The composer drives it; the screen reads it so the
    *  conversation's inset can follow the box's growth on the UI thread. */
   progress: SharedValue<number>;
+  /** The chat it sends to (null for one yet to start), whose workspace and siblings "@" offers. */
+  conversationId?: string | null;
+  /** A remote chat: "@" offers only Library files, and there are no commands, skills or plugins. */
+  remote?: boolean;
 };
 
 export function Composer({
@@ -101,8 +125,11 @@ export function Composer({
   context,
   quota,
   progress,
+  conversationId = null,
+  remote = false,
 }: Props) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [importing, setImporting] = useState(false);
   const images = attachments.filter((a): a is ImagePart => a.type === 'image');
   const files = attachments.filter((a): a is FilePart => a.type === 'file');
@@ -116,12 +143,16 @@ export function Composer({
 
   // Popovers: the attach menu hangs off the box's top-left corner and the context breakdown off
   // its top-right, measured at open time so they track the box wherever the keyboard pushed it.
-  const [popover, setPopover] = useState<'attach' | 'context' | 'quota' | null>(null);
+  const [popover, setPopover] = useState<'attach' | 'context' | 'quota' | 'browse' | null>(null);
   const [anchor, setAnchor] = useState({
     x: TOOLBAR_PAD + 8,
     right: COLLAPSED.margin,
     bottom: 96,
     hostWidth: Dimensions.get('window').width,
+    // The box's own left edge, width and top, for the mention list that spans it.
+    left: COLLAPSED.margin,
+    width: Dimensions.get('window').width - COLLAPSED.margin * 2,
+    top: 400,
   });
   // Collapsed, the text runs up to the right-hand buttons, so leave room for the effort one too.
   const collapsedPadRight =
@@ -172,6 +203,11 @@ export function Composer({
 
   const attach = async (source: AttachAction) => {
     setPopover(null);
+    // The Plugins row lists everything "/" offers: commands, skills and plugins.
+    if (source === 'plugins') {
+      openPopover('browse');
+      return;
+    }
     setImporting(true);
     try {
       const picked =
@@ -199,12 +235,114 @@ export function Composer({
   // Popovers float above the box, anchored where it measures to sit in the root overlay host.
   // Keeping them in the main Activity window (instead of Modal or OverKeyboardView) leaves the
   // keyboard open without relying on a separate WindowManager panel.
-  const openPopover = (which: 'attach' | 'context' | 'quota') => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const measureBox = useCallback((then?: () => void) => {
     measureInOverlay(box.current, ({ x, y, width, hostWidth, hostHeight }) => {
-      setAnchor({ x: x + TOOLBAR_PAD, right: hostWidth - x - width, bottom: hostHeight - y + 8, hostWidth });
-      setPopover(which);
+      setAnchor({ x: x + TOOLBAR_PAD, right: hostWidth - x - width, bottom: hostHeight - y + 8, hostWidth, left: x, width, top: y });
+      then?.();
     });
+  }, []);
+  const openPopover = (which: 'attach' | 'context' | 'quota' | 'browse') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    measureBox(() => setPopover(which));
+  };
+
+  // ---- mentions: "@" for files, folders and chats; "/" for commands, skills and plugins ----
+  // The cursor, to find the "@" or "/" being typed before it.
+  const [selection, setSelection] = useState({ start: text.length, end: text.length });
+  const cursor = Math.min(selection.end, text.length);
+  // Where a mention's list was closed (with back, or by picking from it): it stays shut until the
+  // cursor leaves that mention.
+  const [dismissed, setDismissed] = useState<number | null>(null);
+  // Only while typing; remote chats have nothing for "/".
+  const typed = keyboardVisible ? mentionTrigger(text, cursor) : null;
+  const trigger = typed && typed.start !== dismissed && (typed.char === '@' || !remote) ? typed : null;
+  if (!typed && dismissed !== null) setDismissed(null);
+
+  // What a trigger can offer is gathered once, when it's typed; typing after it only filters.
+  const triggerChar = trigger?.char;
+  const triggerStart = trigger?.start;
+  const commandsHere = triggerStart !== undefined && atStart(text, triggerStart);
+  const pool = useMemo(() => {
+    if (triggerChar === '@') return atSections(conversationId, remote);
+    if (triggerChar === '/') return slashSections(commandsHere);
+    return null;
+    // Keyed by the trigger's position too, so a new "@" gathers afresh (files may have changed).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triggerChar, triggerStart, commandsHere, conversationId, remote]);
+  // Opened from the plus menu: everything "/" offers, gathered as it opens.
+  const browsing = popover === 'browse';
+  const browsed = useMemo(() => (browsing ? slashSections(true) : []), [browsing]);
+  const query = trigger?.query;
+  const sections = useMemo(
+    () => (browsing ? browsed : query !== undefined && pool ? filterSections(pool, query) : []),
+    [browsing, browsed, query, pool]
+  );
+  const typedOpen = !browsing && !!trigger && sections.length > 0;
+  // The list shows once the box has been measured for this mention, never at a stale spot.
+  const [measuredFor, setMeasuredFor] = useState<number | null>(null);
+  useEffect(() => {
+    if (typedOpen && triggerStart !== undefined) measureBox(() => setMeasuredFor(triggerStart));
+  }, [typedOpen, triggerStart, measureBox]);
+  const mentionOpen = browsing || (typedOpen && measuredFor === triggerStart);
+
+  // What mentions can name, for coloring them in the text. Gathered when the text first gets an
+  // "@" or "/", and again after each pick (whatever was picked is then sure to be among them).
+  const [picks, setPicks] = useState(0);
+  const hasMarks = /(^|\s)[@/]\S/.test(text);
+  const labels = useMemo(
+    () => (hasMarks ? mentionLabels(conversationId, remote) : null),
+    // `picks` only asks for a fresh gathering.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasMarks, conversationId, remote, picks]
+  );
+  const spans = useMemo(() => (labels ? mentionSpans(text, labels) : null), [labels, text]);
+
+  const attachLibrary = async (item: LibraryItem) => {
+    setImporting(true);
+    try {
+      const part = await attachmentFor(item);
+      setAttachments((prev) => [...prev, part]);
+    } catch (e) {
+      Alert.alert('Could not attach', e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  /** Writes the picked option into the text as "@label " or "/label ", in place of what was typed for it. */
+  const pickMention = (option: MentionOption) => {
+    Haptics.selectionAsync();
+    const token = `${SLASH_KINDS.includes(option.kind) ? '/' : '@'}${option.label} `;
+    let start: number;
+    let end: number;
+    if (browsing) {
+      // Commands only work at the start of a message; the rest go in at the cursor.
+      start = end = option.kind === 'command' ? 0 : cursor;
+      setPopover(null);
+    } else if (trigger) {
+      start = trigger.start;
+      end = cursor;
+    } else return;
+    const before = text.slice(0, start);
+    const lead = before && !/\s$/.test(before) ? ' ' : '';
+    const next = `${before}${lead}${token}${text.slice(end).replace(/^ +/, '')}`;
+    const at = before.length + lead.length + token.length;
+    onChangeText(next);
+    setSelection({ start: at, end: at });
+    // Picked, its list stays shut while the cursor sits just after it.
+    setDismissed(before.length + lead.length);
+    setPicks((n) => n + 1);
+    if (option.item) void attachLibrary(option.item);
+    // Once the new text has reached the input, the cursor goes after what was picked.
+    requestAnimationFrame(() => {
+      input.current?.focus();
+      input.current?.setSelection(at, at);
+    });
+  };
+
+  const closeMention = () => {
+    if (popover === 'browse') setPopover(null);
+    else if (triggerStart !== undefined) setDismissed(triggerStart);
   };
 
   const removeAttachment = (a: AttachmentPart) => {
@@ -215,6 +353,11 @@ export function Composer({
 
   const send = () => {
     if (!canSend) return;
+    // "/goal" alone clears the chat's goal; with none to clear, it needs saying what to work toward.
+    if (!remote && goalClear(text) && !(conversationId && useChats.getState().conversations[conversationId]?.goal)) {
+      Alert.alert('What’s the goal?', 'Write what to work toward after /goal, like “/goal Get every test passing”.');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Cleared first, so an owner that fills the box again on send (ending an edit) keeps what it puts back.
     const sent = attachments;
@@ -236,6 +379,19 @@ export function Composer({
         bottom={anchor.bottom}
         onPick={attach}
         onClose={() => setPopover(null)}
+        slash={!remote}
+      />
+      <MentionMenu
+        visible={mentionOpen}
+        sections={sections}
+        query={browsing ? '' : (trigger?.query ?? '')}
+        left={anchor.left}
+        width={anchor.width}
+        bottom={anchor.bottom}
+        maxHeight={Math.min(MENTION_MAX_HEIGHT, anchor.top - insets.top - MENTION_TOP_ROOM)}
+        modal={browsing}
+        onPick={pickMention}
+        onClose={closeMention}
       />
       {context && (
         <ContextPopover
@@ -257,7 +413,12 @@ export function Composer({
           onClose={() => setPopover(null)}
         />
       )}
-      <Animated.View ref={box} style={[styles.box, { backgroundColor: colors.composer }, boxStyle]}>
+      <Animated.View
+        ref={box}
+        // The box grows as lines are added; the list above it moves up with it.
+        onLayout={typedOpen ? () => measureBox() : undefined}
+        style={[styles.box, { backgroundColor: colors.composer }, boxStyle]}
+      >
         {(attachments.length > 0 || quotes.length > 0 || importing) && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbs}>
             {quotes.map((q, i) => (
@@ -314,13 +475,29 @@ export function Composer({
       <Animated.View style={inputStyle}>
         <TextInput
           ref={input}
-          value={text}
+          // With mentions in it, the text goes in as styled runs so they show in color; otherwise as is.
+          value={spans?.some((s) => s.mention) ? undefined : text}
           onChangeText={onChangeText}
+          onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
           placeholder={placeholder}
           placeholderTextColor={colors.textTertiary}
           multiline
           style={[styles.input, { color: colors.text }]}
-        />
+        >
+          {spans?.some((s) => s.mention) ? (
+            <Text>
+              {spans.map((s, i) =>
+                s.mention ? (
+                  <Text key={i} style={{ color: colors.accentText }}>
+                    {s.text}
+                  </Text>
+                ) : (
+                  s.text
+                )
+              )}
+            </Text>
+          ) : null}
+        </TextInput>
       </Animated.View>
 
       {/* Pinned to the bottom row: beside the text when collapsed, below it when expanded. */}

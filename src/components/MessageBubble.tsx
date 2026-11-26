@@ -4,12 +4,13 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import { attachmentUri } from '@/lib/attachments';
 import { answerNow } from '@/lib/chat';
 import type { ContentPart, FilePart, ImagePart, ToolPart } from '@/lib/providers';
+import { mentionSpans, sentLabels } from '@/lib/mentions';
 import { splitQuotes } from '@/lib/quotes';
 import { sitesOf, sourcesOf } from '@/lib/sources';
 import { formatStats } from '@/lib/stats';
@@ -410,9 +411,21 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
     setTimeout(() => setCopied(false), 1500);
   };
 
+  // The app's own nudge to keep a /goal going: a quiet line rather than a message from the user.
+  if (message.role === 'user' && message.auto === 'goal') {
+    return (
+      <View style={styles.autoRow} accessibilityRole="text">
+        <Feather name="target" size={13} color={colors.textTertiary} />
+        <Text style={[styles.autoText, { color: colors.textTertiary }]}>Continuing toward the goal</Text>
+      </View>
+    );
+  }
+
   if (message.role === 'user') {
     // Text the user picked from the chat to ask about rides at the top of the message as quotes.
     const { quotes, text: asked } = splitQuotes(text);
+    // The @mentions and /commands it was found to have when sent, shown in color.
+    const mentions = message.content.flatMap((p) => (p.type === 'text' ? (p.mentions ?? []) : []));
     return (
       <View style={styles.userRow}>
         <Images images={images} align="flex-end" />
@@ -430,7 +443,15 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           <Pressable onLongPress={areasSelect ? undefined : copy} style={[styles.userBubble, { backgroundColor: colors.userBubble }]}>
             <SelectionArea>
               <Text selectable={!areasSelect} style={[styles.userText, { color: colors.text }]}>
-                {mark ? mark(asked) : asked}
+                {mentionSpans(asked, sentLabels(mentions)).map((s, i) =>
+                  s.mention ? (
+                    <Text key={i} style={{ color: colors.accentText }}>
+                      {mark ? mark(s.text) : s.text}
+                    </Text>
+                  ) : (
+                    <Fragment key={i}>{mark ? mark(s.text) : s.text}</Fragment>
+                  )
+                )}
               </Text>
             </SelectionArea>
           </Pressable>
@@ -688,6 +709,8 @@ function skillLabel(saved: { name: string; created: boolean }[]) {
 
 const styles = StyleSheet.create({
   userRow: { alignItems: 'flex-end', paddingHorizontal: 16, marginVertical: 10, gap: 6 },
+  autoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 16, marginVertical: 8 },
+  autoText: { fontSize: 13 },
   userBubble: { maxWidth: '82%', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10 },
   userText: { fontSize: 16, lineHeight: 23 },
   quote: {

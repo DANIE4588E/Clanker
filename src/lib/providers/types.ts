@@ -108,6 +108,13 @@ export type TextPart = {
   text: string;
   /** When a reply's text part started streaming, in ms since the epoch. */
   at?: number;
+  /**
+   * On a user's message: what its @mentions and /commands refer to, worked out when it was sent
+   * (see lib/mentions). It goes to the model after the text; the chat shows the text alone.
+   */
+  context?: string;
+  /** On a user's message: its @mentions and /commands as written, which the chat shows in color. */
+  mentions?: string[];
 };
 
 export type ContentPart = TextPart | ImagePart | FilePart | ToolPart | ThoughtPart;

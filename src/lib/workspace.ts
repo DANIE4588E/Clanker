@@ -89,6 +89,28 @@ export class Workspace {
     return out;
   }
 
+  /**
+   * Every file and folder in the workspace, folders before what they hold, up to `limit`. Hidden
+   * ones (".skills", ".cache") and what is inside them are left out.
+   */
+  entries(limit = 2000): { path: string; folder: boolean; modified: number }[] {
+    if (!this.dir.exists) return [];
+    const out: { path: string; folder: boolean; modified: number }[] = [];
+    const visit = (dir: Directory, prefix: string) => {
+      for (const entry of dir.list()) {
+        if (out.length >= limit) return;
+        if (entry.name.startsWith('.')) continue;
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry instanceof Directory) {
+          out.push({ path: rel, folder: true, modified: 0 });
+          visit(entry, rel);
+        } else out.push({ path: rel, folder: false, modified: entry.modificationTime ?? 0 });
+      }
+    };
+    visit(this.dir, '');
+    return out;
+  }
+
   /** A workspace path for `name` that doesn't clash with an existing file: "a.pdf", "a (1).pdf", ... */
   freePath(name: string, dir = '') {
     const base = dir ? `${this.normalizePath(dir)}/` : '';

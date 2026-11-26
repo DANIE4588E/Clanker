@@ -90,6 +90,8 @@ export function describeCall(name: string, input: Record<string, unknown>) {
       return `Search chats “${p('query')}”`;
     case 'read_chat':
       return 'Read an earlier chat';
+    case 'goal_done':
+      return input.achieved === false ? 'Stopped working on the goal' : 'Goal achieved';
     case 'skill_view':
       return p('file') ? `Read ${p('name')}/${p('file')}` : `Use skill ${p('name')}`;
     case 'skill_manage':

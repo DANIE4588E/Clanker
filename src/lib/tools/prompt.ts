@@ -122,7 +122,7 @@ export function agentSystemPrompt() {
 
   const appsSection = lines(
     '# Connected apps',
-    `The user connected ${appList} under Plugins. These tools act on the user's real accounts and files, not copies. A message starting with @AppName asks you to use that app.`,
+    `The user connected ${appList} under Plugins. These tools act on the user's real accounts and files, not copies. A message naming an app with /AppName (or @AppName) asks you to use that app.`,
     ...apps.map((p) => `- ${p.guide}`),
     appWrites &&
       `- Change only what the task needs. ${ask ? 'Ask with ask_user' : 'Ask in chat'} before sending messages or emails, deleting or trashing anything, replacing a file's content, or changing things the user didn't ask you to change, unless they already told you to.`,

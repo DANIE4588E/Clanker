@@ -40,6 +40,8 @@ export interface Message {
   stats?: ReplyStats;
   /** Set on the first message of each version of a fork: the key of the fork in `forks`. */
   fork?: string;
+  /** A user message the app sent on the user's behalf: 'goal' keeps a /goal going (see lib/chat). */
+  auto?: 'goal';
 }
 
 /**
@@ -146,6 +148,16 @@ export interface Conversation {
   branchedFrom?: string;
   /** The versions hidden behind each fork in the chat (see Fork), by key. */
   forks?: Record<string, Fork>;
+  /** What the user set the chat working toward with /goal, until the model marks it done. */
+  goal?: Goal;
+}
+
+/** A /goal: replies keep going on their own until the model calls goal_done (see lib/chat). */
+export interface Goal {
+  text: string;
+  setAt: number;
+  /** Turns the app has sent in a row to keep it going; a message from the user starts the count over. */
+  turns: number;
 }
 
 interface ChatsState {
@@ -183,6 +195,8 @@ interface ChatsState {
   setQueue: (id: string, queue: QueuedMessage[]) => void;
   setMemoryBase: (id: string, memories: Memory[]) => void;
   setSkillBase: (id: string, skills: SkillRef[]) => void;
+  /** Sets the chat's /goal, or with undefined, clears it. */
+  setGoal: (id: string, goal: Goal | undefined) => void;
   /** Records file signatures as seen by the model; null forgets a path. */
   observe: (id: string, entries: Record<string, string | null>) => void;
   /** Removes the message with `messageId` and everything after it. */
@@ -357,6 +371,7 @@ export const useChats = create<ChatsState>()(
         setQueue: (id, queue) => patchConversation(id, () => ({ queue: queue.length ? queue : undefined })),
         setMemoryBase: (id, memoryBase) => patchConversation(id, () => ({ memoryBase })),
         setSkillBase: (id, skillBase) => patchConversation(id, () => ({ skillBase })),
+        setGoal: (id, goal) => patchConversation(id, () => ({ goal })),
         observe: (id, entries) =>
           patchConversation(id, (c) => {
             const observed = { ...c.observed };

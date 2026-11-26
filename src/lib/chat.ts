@@ -5,6 +5,8 @@ import { useUI } from '@/store/ui';
 import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
 import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
+import { goalClear, goalCommand, isPlanRequest, setPlanning } from './commands';
+import { GOAL_NUDGE, goalNudgeContext, resolveMentions } from './mentions';
 import { askToNotify, notifyReplyFinished } from './notifications';
 import { workspaceFor, workspaceOf } from './projects';
 import { parsePartialJson } from './partialJson';
@@ -26,7 +28,7 @@ import {
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
 import { apiKeys, flushJsonStorage, uid } from './storage';
-import { availableTools, executeTool } from './tools';
+import { availableTools, executeTool, toolOn } from './tools';
 import { answerInWords } from './tools/ask';
 import { endPhoneRun, onPhoneStop } from './tools/phone';
 import { markObserved } from './tools/observe';
@@ -56,6 +58,9 @@ function withAnswerNow(messages: WireMessage[]): WireMessage[] {
   return [...messages, { role: 'user', text: ANSWER_NOW, images: [] }];
 }
 
+// Turns in a row the app sends on its own to keep a /goal going, before it waits for the user.
+const GOAL_MAX_TURNS = 20;
+
 // Batch tokens so the store (and the markdown re-render) updates at most ~25 times a second.
 const FLUSH_MS = 40;
 
@@ -79,8 +84,11 @@ function fallbackTitle(text: string) {
   return line ? (line.length > 40 ? line.slice(0, 40).trimEnd() + '…' : line) : 'Image';
 }
 
-/** Adds the user's message to the conversation, or with `replacing`, a new version of that message. */
-function postUserMessage(id: string, text: string, attachments: AttachmentPart[], replacing?: string) {
+/**
+ * Adds the user's message to the conversation, or with `replacing`, a new version of that message.
+ * `auto` marks a message the app sends for the user (see keepGoalGoing).
+ */
+function postUserMessage(id: string, text: string, attachments: AttachmentPart[], replacing?: string, auto?: 'goal') {
   const { tools } = useSettings.getState();
   // With tools on, attachments are also copied into the workspace so the agent can work on them,
   // unless they're there already (an edited message keeping its files).
@@ -101,17 +109,42 @@ function postUserMessage(id: string, text: string, attachments: AttachmentPart[]
     parts.flatMap((p) => (p.type === 'file' && p.path && p.text != null && !p.file ? [p.path] : []))
   );
 
+  // /goal sets the chat's goal; anything the user sends starts the count of automatic turns over.
+  const chats = useChats.getState();
+  const command = goalCommand(text);
+  const goal = chats.conversations[id]?.goal;
+  if (command && 'goal' in command) chats.setGoal(id, { text: command.goal, setAt: Date.now(), turns: 0 });
+  else if (command) chats.setGoal(id, undefined);
+  else if (!auto && goal?.turns) chats.setGoal(id, { ...goal, turns: 0 });
+
+  // What the message's @mentions and /commands point at, worked out now (after attachments are
+  // saved, so they resolve too) and kept with it: the note for the model, the mentions to color.
+  let resolved: { context?: string; mentions: string[] } = { mentions: [] };
+  try {
+    const attached = parts.flatMap((p) => (p.type === 'file' ? [p.name] : []));
+    resolved = auto === 'goal' ? { context: goalNudgeContext(goal?.text ?? ''), mentions: [] } : resolveMentions(id, text, attached);
+  } catch {
+    // The message goes as typed.
+  }
+  const { context, mentions } = resolved;
+
   const message = {
     role: 'user' as const,
-    content: [...parts, ...(text ? [{ type: 'text' as const, text }] : [])],
+    content: [
+      ...parts,
+      ...(text
+        ? [{ type: 'text' as const, text, ...(context ? { context } : {}), ...(mentions.length ? { mentions } : {}) }]
+        : []),
+    ],
     status: 'done' as const,
+    ...(auto ? { auto } : {}),
   };
   if (replacing) useChats.getState().branch(id, replacing, message);
   else useChats.getState().addMessage(id, message);
 }
 
 /** Starts a new conversation (when `conversationId` is null) or continues one, and streams the reply. */
-export function sendMessage(conversationId: string | null, text: string, attachments: AttachmentPart[]) {
+export function sendMessage(conversationId: string | null, text: string, attachments: AttachmentPart[], auto?: 'goal') {
   if (isRemoteChat(conversationId)) return sendRemoteMessage(conversationId, text, attachments);
   const { active } = useSettings.getState();
   if (!active) throw new Error('Add an endpoint in Settings to start chatting.');
@@ -125,7 +158,7 @@ export function sendMessage(conversationId: string | null, text: string, attachm
     });
 
   chats.setModel(id, active.endpointId, active.model);
-  postUserMessage(id, text, attachments);
+  postUserMessage(id, text, attachments, undefined, auto);
   if (!conversationId) chats.rename(id, fallbackTitle(text), false);
 
   void runCompletion(id);
@@ -298,6 +331,12 @@ export function submitMessage(conversationId: string | null, text: string, attac
     const chat = useChats.getState().conversations[conversationId];
     if (!chat?.remote?.submissionId) return sendRemoteMessage(conversationId, text, attachments);
     useChats.getState().setQueue(conversationId, [...(chat.queue ?? []), { id: uid(), text, attachments, remoteEffort: remoteEffortForChat(conversationId) }]);
+    return conversationId;
+  }
+  // "/goal" on its own (or "/goal clear") clears the chat's goal at once, even mid-reply, and sends
+  // nothing. (The composer explains /goal instead when there is no goal to clear.)
+  if (conversationId && !attachments.length && goalClear(text)) {
+    useChats.getState().setGoal(conversationId, undefined);
     return conversationId;
   }
   if (!conversationId || !controllers.has(conversationId)) return sendMessage(conversationId, text, attachments);
@@ -498,6 +537,10 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
     });
   };
 
+  // A reply to /plan may only look into the task; tools that change things are refused (see executeTool).
+  const asked = historyOf(useChats.getState().conversations[id]!, replyId).findLast((m) => m.role === 'user');
+  setPlanning(id, !!asked && isPlanRequest(messageText(asked)));
+
   let apiKey: string | undefined;
   let interrupted: string | undefined;
   try {
@@ -692,6 +735,7 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
     if (timer) clearTimeout(timer);
     controllers.delete(id);
     wrapUps.delete(id);
+    setPlanning(id, false);
     endPhoneRun(id, controller.signal.aborted);
     // Steers that never reached a step boundary wait in the queue like any other message.
     const queue = queueOf(id);
@@ -726,8 +770,24 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       // No model to send with; the message stays queued.
     }
   }
+  // With nothing queued, a /goal not yet marked done keeps the work going; not after "Answer now",
+  // which asks for the work to stop. goal_done is looked up now rather than among the reply's
+  // tools, since a goal set by steering arrives after those were picked.
+  if (!stopped && !wrapUp && !controllers.has(id) && toolsOn && toolOn('goal_done', id)) keepGoalGoing(id);
   // Unless a queued message went out as the next turn (or the user stopped it manually), notify.
   if (!controller.signal.aborted && !controllers.has(id)) void notifyReplyFinished(id, replyId);
+}
+
+/** Sends the next turn toward the chat's /goal for the user, up to GOAL_MAX_TURNS in a row. */
+function keepGoalGoing(id: string) {
+  const goal = useChats.getState().conversations[id]?.goal;
+  if (!goal || goal.turns >= GOAL_MAX_TURNS) return;
+  useChats.getState().setGoal(id, { ...goal, turns: goal.turns + 1 });
+  try {
+    sendMessage(id, GOAL_NUDGE, [], 'goal');
+  } catch {
+    // No model to send with; the goal waits for the user.
+  }
 }
 
 async function generateTitle(id: string, chatEndpoint: Endpoint, chatApiKey: string | undefined, chatModel: string) {
