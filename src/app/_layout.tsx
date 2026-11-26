@@ -12,6 +12,7 @@ import { OverlayHost } from '@/components/OverlayHost';
 import { ReplyNotifications } from '@/components/ReplyNotifications';
 import { ScriptRuntime } from '@/components/ScriptRuntime';
 import { UpdateCheck } from '@/components/Updates';
+import { resumeInterruptedReplies } from '@/lib/chat';
 // Keeps the On-device endpoint in step with downloaded models.
 import '@/lib/local/endpoint';
 import { useTheme } from '@/lib/theme';
@@ -34,6 +35,11 @@ export default function RootLayout() {
     const timer = setTimeout(() => setRuntimeOn(toolsOn), RUNTIME_DELAY);
     return () => clearTimeout(timer);
   }, [toolsOn]);
+
+  // Replies cut off when the app was last closed carry on where they stopped.
+  useEffect(() => {
+    resumeInterruptedReplies();
+  }, []);
 
   useEffect(() => {
     Appearance.setColorScheme(themePreference === 'system' ? 'unspecified' : themePreference);

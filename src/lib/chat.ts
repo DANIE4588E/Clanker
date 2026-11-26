@@ -1,11 +1,12 @@
-import { interruptContent, messageText, useChats, type CompressionBlock, type Conversation, type Message, type QueuedMessage } from '@/store/chats';
+import { interruptContent, messageText, takeCutOffReplies, useChats, type CompressionBlock, type Conversation, type Message, type QueuedMessage } from '@/store/chats';
 import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/store/settings';
 import { localToolsOn } from '@/store/localModels';
 import { useUI } from '@/store/ui';
 import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
-import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
+import { autoCompress, buildWire, compactEnd, compactHistory, historyOf, historyTokens, unitsOf } from './context';
+import { compactRequest, dismissCompactionError, setCompaction } from './compact';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
-import { goalCommand, goalControl, planCommand, planControl, type GoalCommand } from './commands';
+import { compactCommand, goalCommand, goalControl, planCommand, planControl, type GoalCommand } from './commands';
 import { resolveMentions } from './mentions';
 import { clearGoal, GOAL_IDLE_LIMIT, GOAL_NUDGE, goalActive, goalMaxTurns, goalNudgeContext, isPlanning, pauseGoal, resumeGoal, startGoal } from './planning';
 import { askToNotify, notifyReplyFinished } from './notifications';
@@ -46,19 +47,21 @@ const ANSWER_NOW =
   '[The user pressed "Answer now". Stop working: make no more tool calls, and answer the user directly from what you have ' +
   'found and done so far. Where something is still unchecked or unfinished, say so briefly.]';
 
-/** The history with the request to answer now at its end, on the newest turn rather than a turn of its own. */
-function withAnswerNow(messages: WireMessage[]): WireMessage[] {
+/** The history with `request` from the app at its end, on the newest turn rather than a turn of its own. */
+function withRequest(messages: WireMessage[], request: string): WireMessage[] {
   const last = messages[messages.length - 1];
   const rest = messages.slice(0, -1);
   if (last?.role === 'tool' && last.results?.length) {
     const results = [...last.results];
     const r = results[results.length - 1];
-    results[results.length - 1] = { ...r, output: `${r.output}\n\n${ANSWER_NOW}` };
+    results[results.length - 1] = { ...r, output: `${r.output}\n\n${request}` };
     return [...rest, { ...last, results }];
   }
-  if (last?.role === 'user') return [...rest, { ...last, text: `${last.text}\n\n${ANSWER_NOW}` }];
-  return [...messages, { role: 'user', text: ANSWER_NOW, images: [] }];
+  if (last?.role === 'user') return [...rest, { ...last, text: `${last.text}\n\n${request}` }];
+  return [...messages, { role: 'user', text: request, images: [] }];
 }
+
+const withAnswerNow = (messages: WireMessage[]) => withRequest(messages, ANSWER_NOW);
 
 // Batch tokens so the store (and the markdown re-render) updates at most ~25 times a second.
 const FLUSH_MS = 40;
@@ -193,6 +196,7 @@ export function sendMessage(conversationId: string | null, text: string, attachm
     });
 
   chats.setModel(id, active.endpointId, active.model);
+  dismissCompactionError(id);
   postUserMessage(id, text, attachments, undefined, auto);
   if (!conversationId) chats.rename(id, fallbackTitle(text), false);
 
@@ -340,6 +344,22 @@ export function continueReply(conversationId: string) {
 }
 
 /**
+ * Picks up, in place and with each chat's own model, the replies the app was closed in the middle
+ * of, as Continue would. Called once the app has started. A reply is only picked up on its own
+ * once: if the app is closed again before it finishes (a model too big for the phone's memory, say),
+ * it waits for the user's Continue rather than starting over at every launch.
+ */
+export function resumeInterruptedReplies() {
+  for (const id of takeCutOffReplies()) {
+    if (controllers.has(id)) continue;
+    const messages = useChats.getState().conversations[id]?.messages;
+    const last = messages?.[messages.length - 1];
+    if (last?.role !== 'assistant' || last.status !== 'done' || !last.interrupted) continue;
+    void runCompletion(id, { resumeMessageId: last.id, auto: true });
+  }
+}
+
+/**
  * Has the running reply stop what it's doing (the response it's writing, the tool call it's
  * running) and answer right away from what it has found so far, with no more tool calls.
  */
@@ -387,6 +407,17 @@ export function submitMessage(conversationId: string | null, text: string, attac
         return id;
       }
     }
+    // /compact runs at once, or once the running reply is done; it never steers a reply.
+    // (The composer stops it in a chat with nothing to compact.)
+    const compactCmd = compactCommand(text);
+    if (compactCmd && conversationId) {
+      if (controllers.has(conversationId)) {
+        useChats.getState().setQueue(conversationId, [...queueOf(conversationId), { id: uid(), text, attachments: [] }]);
+      } else {
+        void compactChat(conversationId, compactCmd.focus);
+      }
+      return conversationId;
+    }
   }
   if (!conversationId || !controllers.has(conversationId)) return sendMessage(conversationId, text, attachments);
   // While the model waits on a question or on a decision about its plan, a message answers it.
@@ -412,6 +443,11 @@ function sendFromQueue(conversationId: string, queuedId?: string) {
   const message = queuedId ? queue.find((m) => m.id === queuedId) : queue[0];
   if (!message) return;
   useChats.getState().setQueue(conversationId, queue.filter((m) => m !== message));
+  const compactCmd = message.attachments.length ? null : compactCommand(message.text);
+  if (compactCmd) {
+    void compactChat(conversationId, compactCmd.focus);
+    return;
+  }
   try {
     sendMessage(conversationId, message.text, message.attachments);
   } catch (e) {
@@ -424,9 +460,13 @@ function sendFromQueue(conversationId: string, queuedId?: string) {
 export function sendQueuedNow(conversationId: string, queuedId: string) {
   if (isRemoteChat(conversationId)) return sendRemoteQueue(conversationId, queuedId);
   if (!controllers.has(conversationId)) return sendFromQueue(conversationId, queuedId);
+  // A queued /compact can't join a reply; it goes once the reply is done.
   useChats
     .getState()
-    .setQueue(conversationId, queueOf(conversationId).map((m) => (m.id === queuedId ? { ...m, steer: true } : m)));
+    .setQueue(
+      conversationId,
+      queueOf(conversationId).map((m) => (m.id === queuedId && !compactCommand(m.text) ? { ...m, steer: true } : m))
+    );
 }
 
 /** Takes a message out of the queue to be edited, its attachments kept. */
@@ -442,7 +482,134 @@ export function deleteQueued(conversationId: string, queuedId: string) {
   for (const a of message?.attachments ?? []) if (a.file) deleteAttachment(a.file);
 }
 
-async function runCompletion(id: string, opts?: { resumeMessageId?: string; branchFrom?: { messageId: string; replace?: boolean } }) {
+/**
+ * Whether /compact has anything to do in the chat: a local chat with history not already
+ * compacted, or a reply running that will add some.
+ */
+export function canCompact(conversationId: string | null) {
+  if (!conversationId || isRemoteChat(conversationId)) return false;
+  return controllers.has(conversationId) || !!compactEnd(conversationId);
+}
+
+/**
+ * /compact: has the chat's model summarise the conversation so far, and puts the summary in place
+ * of that history from the next turn on. The messages stay on screen; only what the model is sent
+ * changes. It holds the chat like a reply does: messages sent meanwhile queue up behind it, and
+ * stopStreaming cancels it. How it is going shows through useCompaction (see lib/compact).
+ */
+export async function compactChat(id: string, focus = '') {
+  if (isRemoteChat(id) || controllers.has(id)) return;
+  const chats = useChats.getState();
+  if (!chats.conversations[id]) return;
+  const { active } = useSettings.getState();
+  if (active) chats.setModel(id, active.endpointId, active.model);
+  const conversation = useChats.getState().conversations[id]!;
+  const settings = useSettings.getState();
+  const endpoint = settings.endpoints.find((e) => e.id === conversation.endpointId);
+  const fail = (error: string) => setCompaction(id, { status: 'error', error });
+  if (!endpoint) return fail('This chat’s endpoint no longer exists. Pick another model.');
+  // Where the summary will end, fixed now; anything after it (there should be nothing) stays as it is.
+  const end = compactEnd(id);
+  if (!end) return fail('There’s nothing new to compact yet.');
+
+  const controller = new AbortController();
+  controllers.set(id, controller);
+  setCompaction(id, { status: 'running', startedAt: Date.now() });
+  let failed = false;
+  try {
+    const apiKey = (await apiKeys.get(endpoint.id)) ?? undefined;
+    // The system prompt, tools and history a reply would send now, so the request reads from the
+    // prompt cache rather than paying for the whole chat again.
+    const toolsOn = settings.tools && (endpoint.type !== 'local' || localToolsOn(conversation.model));
+    const offered = toolsOn ? availableTools(id) : [];
+    const tools = offered.length ? offered : undefined;
+    ensureMemoryBase(id);
+    if (tools) ensureSkillBase(id);
+    const system = systemPrompt(id, !!tools);
+    const effort = resolveEffort(settings, { endpointId: endpoint.id, model: conversation.model });
+    const base64Cache = new Map<string, string | null>();
+    const readBase64 = async (file: string) => {
+      if (!base64Cache.has(file)) base64Cache.set(file, await readAttachmentBase64(file).catch(() => null));
+      return base64Cache.get(file)!;
+    };
+
+    const summarise = async (withTools: boolean) => {
+      for (let attempt = 0; ; attempt++) {
+        let text = '';
+        let streamed = false;
+        try {
+          const current = useChats.getState().conversations[id];
+          if (!current) throw new Error('This chat no longer exists.');
+          const messages = await buildWire(unitsOf(historyOf(current)), current.compressions ?? [], {
+            endpointType: endpoint.type,
+            withTools,
+            tagged: withTools,
+            notes: withTools ? current.notes : undefined,
+            readBase64,
+          });
+          await getAdapter(endpoint.type).stream({
+            endpoint,
+            apiKey,
+            model: conversation.model,
+            effort: effort?.level,
+            system,
+            tools: withTools ? tools : undefined,
+            messages: withRequest(messages, compactRequest(focus)),
+            signal: controller.signal,
+            onToken: (token) => {
+              streamed = true;
+              text += token;
+            },
+            onReasoning: () => {
+              streamed = true;
+            },
+          });
+          return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        } catch (e) {
+          // Over the model's real window: compress the oldest history mechanically and try again.
+          const retry =
+            attempt < 3 &&
+            !streamed &&
+            !controller.signal.aborted &&
+            isOverflow(e) &&
+            autoCompress(id, '', 0, historyTokens(id, '') / 2);
+          if (!retry) throw e;
+        }
+      }
+    };
+
+    let summary = await summarise(!!tools);
+    // A model that reached for a tool instead of writing gets asked again with none on offer.
+    if (summary.length < 20 && tools && !controller.signal.aborted) summary = await summarise(false);
+    if (summary.length < 20) throw new Error('The model didn’t write a summary. Try again, or with another model.');
+    compactHistory(id, end, summary);
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      failed = true;
+      fail(e instanceof Error ? e.message : String(e));
+    }
+  } finally {
+    controllers.delete(id);
+    if (!failed) setCompaction(id, undefined);
+    // "Send now" on a queued message has nothing to join; it waits its turn like the rest.
+    const queue = queueOf(id);
+    if (queue.some((m) => m.steer)) useChats.getState().setQueue(id, queue.map(({ steer: _, ...m }) => m));
+    flushJsonStorage();
+  }
+  // Messages sent while it ran go out now; after a failure or a cancel they wait for the user.
+  if (!failed && !controller.signal.aborted) {
+    try {
+      sendFromQueue(id);
+    } catch {
+      // No model to send with; the message stays queued.
+    }
+  }
+}
+
+async function runCompletion(
+  id: string,
+  opts?: { resumeMessageId?: string; auto?: boolean; branchFrom?: { messageId: string; replace?: boolean } }
+) {
   const chats = useChats.getState();
   const conversation = chats.conversations[id];
   if (!conversation) return;
@@ -469,6 +636,8 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       status: 'streaming',
       error: undefined,
       interrupted: undefined,
+      // Continued by the user, a reply may be picked up on its own again if the app closes on it.
+      autoResumed: opts.auto ? true : undefined,
       model: conversation.model,
     });
   } else {

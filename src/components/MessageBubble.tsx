@@ -21,6 +21,7 @@ import { LOCAL_ENDPOINT_ID } from '@/store/localModels';
 import { describeCall } from '@/lib/tools/describe';
 import { useSettings } from '@/store/settings';
 import { BrandIcon } from './BrandIcon';
+import { CompactionMarker } from './CompactionMarker';
 import { FileIcon } from './FileIcon';
 import { useFindMarker } from './FindHighlight';
 import { brandOfModel, friendlyModelName } from '@/lib/modelNames';
@@ -729,7 +730,17 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   );
 }
 
-export const MessageBubble = memo(MessageBubbleInner);
+/** The message, and below it the mark of a /compact that summarised the chat up to it, if any. */
+function MessageWithCompaction(props: Props) {
+  return (
+    <>
+      <MessageBubbleInner {...props} />
+      <CompactionMarker conversationId={props.conversationId} messageId={props.message.id} />
+    </>
+  );
+}
+
+export const MessageBubble = memo(MessageWithCompaction);
 
 /** "Skill learned · a · Skill improved · b", for the line under a reply the skill review changed. */
 function skillLabel(saved: { name: string; created: boolean }[]) {

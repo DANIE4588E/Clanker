@@ -9,7 +9,8 @@ import { AttachmentMenu, type AttachAction } from '@/components/AttachmentMenu';
 import { showGoalDetails } from '@/components/GoalSheet';
 import { MentionMenu } from '@/components/MentionMenu';
 import { attachmentUri, deleteAttachment, pickFiles, pickImages } from '@/lib/attachments';
-import { goalCommand } from '@/lib/commands';
+import { canCompact } from '@/lib/chat';
+import { compactCommand, goalCommand } from '@/lib/commands';
 import { attachmentFor, type LibraryItem } from '@/lib/library';
 import {
   atSections,
@@ -365,6 +366,17 @@ export function Composer({
       if ('status' in goalCmd && conversationId) {
         showGoalDetails(conversationId);
         onChangeText('');
+        return;
+      }
+    }
+    // /compact summarises the chat as it is; it needs a chat to summarise and takes no files.
+    if (!remote && compactCommand(text)) {
+      if (attachments.length) {
+        Alert.alert('Send the files on their own', '/compact only summarises the chat. Send the attachments in a message of their own.');
+        return;
+      }
+      if (!canCompact(conversationId ?? null)) {
+        Alert.alert('Nothing to compact', '/compact summarises the chat so far to free up context, and there’s nothing new here to summarise yet.');
         return;
       }
     }

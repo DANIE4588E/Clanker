@@ -295,7 +295,14 @@ function nextBlockId(blocks: CompressionBlock[]) {
  * Adds a block over units [start, end], absorbing the blocks inside it as children. Fails on a
  * block that straddles either edge.
  */
-function addBlock(units: Unit[], blocks: CompressionBlock[], start: number, end: number, summary: string, auto = false) {
+function addBlock(
+  units: Unit[],
+  blocks: CompressionBlock[],
+  start: number,
+  end: number,
+  summary: string,
+  flags: Pick<CompressionBlock, 'auto' | 'compacted'> = {}
+) {
   const ranges = applied(units, blocks);
   const inside: CompressionBlock[] = [];
   for (const r of ranges) {
@@ -317,7 +324,7 @@ function addBlock(units: Unit[], blocks: CompressionBlock[], start: number, end:
     end: units[end].key,
     summary: summary.trim(),
     createdAt: Date.now(),
-    ...(auto ? { auto: true } : {}),
+    ...flags,
     ...(inside.length ? { children: inside } : {}),
   };
   const next = [...blocks.filter((b) => live.has(b) && !inside.includes(b)), block];
@@ -441,7 +448,7 @@ export function contextStatus(scope: ContextScope, budget: number) {
     for (const r of ranges) {
       const original = units.slice(r.start, r.end + 1).reduce((n, u) => n + u.tokens, 0);
       lines.push(
-        `- ${r.block.id} ${rangeLabel(units, r.start, r.end)}${r.block.auto ? ' (auto)' : ''}: ${formatTokens(original)} → ${formatTokens(
+        `- ${r.block.id} ${rangeLabel(units, r.start, r.end)}${r.block.auto ? ' (auto)' : r.block.compacted != null ? ' (/compact)' : ''}: ${formatTokens(original)} → ${formatTokens(
           tokensOf(r.block.summary)
         )} tokens. ${r.block.summary.replace(/\s+/g, ' ').slice(0, 90)}…`
       );
@@ -537,7 +544,7 @@ export function autoCompress(conversationId: string, replyId: string, trigger: n
     // Re-wrapping blocks without any new history in them would only nest deeper.
     if (end < start || lastNew < 0) continue;
     try {
-      ({ blocks } = addBlock(units, blocks, start, end, mechanicalSummary(units, blocks, start, end), true));
+      ({ blocks } = addBlock(units, blocks, start, end, mechanicalSummary(units, blocks, start, end), { auto: true }));
       changed = true;
     } catch {
       // A block straddles the span's end; leave this span alone.
@@ -545,6 +552,57 @@ export function autoCompress(conversationId: string, replyId: string, trigger: n
   }
   if (changed) useChats.getState().setCompressions(conversationId, blocks);
   return changed;
+}
+
+// ---- /compact ------------------------------------------------------------------------------------
+
+/** What the summary from /compact starts with, for the model; the chat shows the summary without it. */
+export const COMPACT_HEADER =
+  '[The user compacted the chat with /compact: this summary stands in for the whole conversation before this point.]';
+
+/**
+ * The key of the last unit /compact would cover: the newest history unit, as long as the history
+ * isn't one compressed block already. Null when there is nothing (new) to compact.
+ */
+export function compactEnd(conversationId: string) {
+  const conversation = useChats.getState().conversations[conversationId];
+  if (!conversation) return null;
+  const units = unitsOf(historyOf(conversation));
+  if (!units.length) return null;
+  const ranges = applied(units, conversation.compressions ?? []);
+  if (ranges.length === 1 && ranges[0].start === 0 && ranges[0].end === units.length - 1) return null;
+  return units[units.length - 1].key;
+}
+
+/**
+ * Replaces the history from its start to unit `endKey` with `summary`, absorbing the blocks
+ * inside as children (decompress brings them back). Returns the tokens it replaced and the
+ * tokens it costs now.
+ */
+export function compactHistory(conversationId: string, endKey: string, summary: string) {
+  const conversation = useChats.getState().conversations[conversationId];
+  if (!conversation) throw new ContextError('This chat no longer exists.');
+  const units = unitsOf(historyOf(conversation));
+  const end = units.findIndex((u) => u.key === endKey);
+  if (end < 0) throw new ContextError('The chat changed while it was being compacted. Try again.');
+  const blocks = conversation.compressions ?? [];
+  const before = visibleTokens(units.slice(0, end + 1), blocks);
+  const result = addBlock(units, blocks, 0, end, `${COMPACT_HEADER}\n\n${summary.trim()}`, { compacted: before });
+  useChats.getState().setCompressions(conversationId, result.blocks);
+  return { before, after: tokensOf(result.block.summary) };
+}
+
+/**
+ * The /compact block ending on message `messageId`, searched for among absorbed blocks too, so the
+ * chat can mark where each compaction happened.
+ */
+export function compactionAt(blocks: CompressionBlock[] | undefined, messageId: string): CompressionBlock | undefined {
+  for (const b of blocks ?? []) {
+    if (b.compacted != null && (b.end === messageId || b.end.startsWith(`${messageId}:`))) return b;
+    const inner = compactionAt(b.children, messageId);
+    if (inner) return inner;
+  }
+  return undefined;
 }
 
 export { ContextError };

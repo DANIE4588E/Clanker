@@ -23,6 +23,11 @@ export interface Message {
   error?: string;
   /** Reason the reply stopped early (user stopped, step limit, app closed). */
   interrupted?: string;
+  /**
+   * Set when the app picked the reply back up on its own after being closed mid-reply (see
+   * resumeInterruptedReplies in lib/chat). A reply cut off again while so marked is left for the user.
+   */
+  autoResumed?: true;
   /** Set while a running reply wraps up to answer from what it has (see answerNow in lib/chat). */
   answerNow?: true;
   model?: string;
@@ -76,6 +81,8 @@ export interface CompressionBlock {
   createdAt: number;
   /** Made by the app when the context ran over budget, not by the model. */
   auto?: boolean;
+  /** Set on a block the user made with /compact: the estimated tokens of history it replaced. */
+  compacted?: number;
   children?: CompressionBlock[];
 }
 
@@ -300,6 +307,19 @@ function imagesOf(messages: Pick<Message, 'content'>[]) {
   );
 }
 
+/**
+ * Chats whose last reply was still being written when the app was closed, found as the chats load.
+ * Declared before the store: storage is read synchronously, so loading runs as the store is made.
+ */
+const cutOffAtLaunch = new Set<string>();
+
+/** The chats with a reply the app was closed in the middle of, once: later calls get none. */
+export function takeCutOffReplies(): string[] {
+  const ids = [...cutOffAtLaunch];
+  cutOffAtLaunch.clear();
+  return ids;
+}
+
 export const useChats = create<ChatsState>()(
   persist(
     (set, get) => {
@@ -511,6 +531,12 @@ export const useChats = create<ChatsState>()(
               ? { ...m, status: 'done', content: interruptContent(content), interrupted: 'Interrupted when the app closed' }
               : { ...m, content };
           };
+          // A reply cut off at the end of the chat is picked up again once the app is up, unless it
+          // was already being picked up: the reply itself may be what keeps getting the app killed.
+          const last = c.messages[c.messages.length - 1];
+          if (last?.role === 'assistant' && last.status === 'streaming' && c.backendId === 'local' && !last.autoResumed) {
+            cutOffAtLaunch.add(c.id);
+          }
           c.messages = c.messages.map(settle);
           for (const f of Object.values(c.forks ?? {})) f.versions = f.versions.map((v) => v.map(settle));
         }

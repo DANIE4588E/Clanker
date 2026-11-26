@@ -82,7 +82,7 @@ export const LOCAL_TOOL_GROUPS: ToolGroup[] = [
   },
   {
     title: 'Long chats',
-    footer: 'Lets the model summarise older parts of a long chat to stay within its context budget. Past the auto-compression threshold, the app compresses history on its own either way.',
+    footer: 'Lets the model summarise older parts of a long chat to stay within its context budget. Past the auto-compression threshold, the app compresses history on its own either way. To summarise the whole chat yourself, send /compact.',
     tools: [
       { names: ['compress'], title: 'Compress history', detail: 'Summarise older messages to free up context' },
       { names: ['decompress'], title: 'Restore history', detail: 'Bring back messages it compressed' },

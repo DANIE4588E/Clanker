@@ -6,13 +6,14 @@ import { splitQuotes } from './quotes';
  * Slash commands: typed at the start of a message, they change how the chat handles it rather
  * than pointing the model at something (see lib/mentions for the rest of what "/" offers).
  */
-export type CommandName = 'goal' | 'plan';
+export type CommandName = 'goal' | 'plan' | 'compact';
 
 export type Command = { name: CommandName; description: string; icon: keyof typeof Feather.glyphMap };
 
 export const COMMANDS: Command[] = [
   { name: 'goal', description: 'Set a goal and keep working on it until it’s done', icon: 'target' },
   { name: 'plan', description: 'Research first, then propose a plan for you to approve', icon: 'map' },
+  { name: 'compact', description: 'Summarise the chat so far to free up context', icon: 'minimize-2' },
 ];
 
 /** The message's own text, after any quotes picked from the chat (see lib/quotes). */
@@ -67,6 +68,15 @@ export const planControl = (text: string) => {
   const command = planCommand(text);
   return !!command && ('exit' in command || !command.start);
 };
+
+/**
+ * What a message starting with /compact asks for: the chat so far replaced by a summary the model
+ * writes, with what to focus on if anything follows the command (an empty string when nothing does).
+ */
+export function compactCommand(text: string): { focus: string } | null {
+  const m = /^\/compact(?=\s|$)([\s\S]*)$/i.exec(body(text));
+  return m ? { focus: m[1].trim() } : null;
+}
 
 // Built-in tools that change files, run code or act; everything else only looks.
 const CHANGING_TOOLS = new Set([

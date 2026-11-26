@@ -1,8 +1,9 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
-import { leavePlanMode } from '@/lib/chat';
+import { leavePlanMode, stopStreaming } from '@/lib/chat';
+import { setCompaction, useCompaction } from '@/lib/compact';
 import * as Haptics from '@/lib/haptics';
 import { clearGoal, pauseGoal, resumeGoal, todoSummary } from '@/lib/planning';
 import { useTheme } from '@/lib/theme';
@@ -102,24 +103,64 @@ function Row({
 }
 
 /**
- * What the chat is in the middle of, as a tab on top of the message box: plan mode, the goal it
- * is working toward, and the agent's todo list, one line each, with ways to change or end them.
+ * What the chat is in the middle of, as a tab on top of the message box: a /compact under way (or
+ * failed), plan mode, the goal it is working toward, and the agent's todo list, one line each,
+ * with ways to change or end them.
  */
 export function ChatStatus({ conversationId, progress }: { conversationId: string; progress: SharedValue<number> }) {
   const { colors } = useTheme();
   const plan = useChats((s) => s.conversations[conversationId]?.plan);
   const goal = useChats((s) => s.conversations[conversationId]?.goal);
   const todos = useChats((s) => s.conversations[conversationId]?.todos);
+  const compaction = useCompaction((s) => s[conversationId]);
   const maxTurns = useSettings((s) => s.goalMaxTurns);
   const [listOpen, setListOpen] = useState(false);
   const cardStyle = useAnimatedStyle(() => ({ marginHorizontal: composerMargin(progress.value) + INSET }));
 
-  if (!plan && !goal && !todos?.length) return null;
+  if (!plan && !goal && !todos?.length && !compaction) return null;
   const tally = todos?.length ? todoSummary(todos) : null;
   const allDone = !!tally && tally.done === tally.total;
   const divider = { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.chromeBorder };
 
   const rows: ReactNode[] = [];
+  if (compaction?.status === 'running') {
+    rows.push(
+      <Row
+        key="compact"
+        icon="minimize-2"
+        tint={colors.accentText}
+        label="Compacting: the model is summarising the chat so far"
+        actions={
+          <>
+            <ActivityIndicator size="small" color={colors.textTertiary} style={styles.spinner} />
+            <Action icon="x" label="Cancel compacting" onPress={() => stopStreaming(conversationId)} />
+          </>
+        }
+      >
+        <Text style={[styles.title, { color: colors.text }]}>Compacting</Text>
+        <Text numberOfLines={1} style={[styles.detail, styles.fill, { color: colors.textTertiary }]}>
+          Summarising the chat so far
+        </Text>
+      </Row>
+    );
+  } else if (compaction?.status === 'error') {
+    const { error } = compaction;
+    rows.push(
+      <Row
+        key="compact"
+        icon="alert-circle"
+        tint={colors.danger}
+        onPress={() => Alert.alert('Couldn’t compact the chat', error)}
+        label={`Couldn't compact the chat: ${error}`}
+        actions={<Action icon="x" label="Dismiss" onPress={() => setCompaction(conversationId, undefined)} />}
+      >
+        <Text style={[styles.title, { color: colors.text }]}>Couldn’t compact</Text>
+        <Text numberOfLines={1} style={[styles.detail, styles.fill, { color: colors.textTertiary }]}>
+          {error}
+        </Text>
+      </Row>
+    );
+  }
   if (plan) {
     rows.push(
       <Row
@@ -245,6 +286,7 @@ const styles = StyleSheet.create({
   count: { fontVariant: ['tabular-nums'] },
   tag: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'], marginRight: 4 },
   action: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  spinner: { transform: [{ scale: 0.8 }], marginRight: 2 },
   panel: { maxHeight: 200 },
   // The padding goes on the content: on the scroll view itself Android leaves it out of the scroll range.
   panelContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 4 },
