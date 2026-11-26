@@ -1,14 +1,15 @@
 import Feather from '@expo/vector-icons/Feather';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Row, Section, ToggleRow } from '@/components/Form';
+import { friendlyModelName } from '@/lib/modelNames';
 import { entryOn, MEMORY_TOOLS } from '@/lib/tools/catalog';
 import { useTheme } from '@/lib/theme';
 import { useShallow } from 'zustand/react/shallow';
 import { MAX_MEMORY_CHARS, MAX_TOTAL_CHARS, poolOf, useMemory, type Memory } from '@/store/memory';
 import { useProjects } from '@/store/projects';
-import { useSettings } from '@/store/settings';
+import { resolveTaskModel, useSettings } from '@/store/settings';
 
 const SOURCES: Record<Memory['source'], string> = {
   model: 'Saved by a model',
@@ -40,6 +41,8 @@ export default function MemoryScreen() {
   const setMemory = useSettings((s) => s.setMemory);
   const memoryAuto = useSettings((s) => s.memoryAuto);
   const setMemoryAuto = useSettings((s) => s.setMemoryAuto);
+  const memoryModel = useSettings((s) => resolveTaskModel(s.endpoints, s.memoryModel)?.model);
+  const friendly = useSettings((s) => s.friendlyModelNames);
   const tools = useSettings((s) => s.tools);
   const disabled = useSettings((s) => s.disabledTools);
   const setToolsEnabled = useSettings((s) => s.setToolsEnabled);
@@ -82,8 +85,8 @@ export default function MemoryScreen() {
       {project && <Stack.Screen options={{ title: `${project.name} memory` }} />}
       <Text style={[styles.intro, { color: colors.textTertiary }]}>
         {project
-          ? `"${project.name}" keeps its own memory: only chats in it see these, and they don't see your other memories. Changes apply to new chats, and to open chats from your next message when Files & code is on.`
-          : "Memories are short facts about you that every chat can see, so you don't have to repeat yourself. Changes apply to new chats, and to open chats from your next message when Files & code is on. Projects with project-only memory keep theirs apart."}
+          ? `"${project.name}" keeps its own memory: only chats in it see these, and they don't see your other memories. Changes apply to open chats from your next message.`
+          : "Memories are short facts about you that every chat can see, so you don't have to repeat yourself. Changes apply to open chats from your next message. Projects with project-only memory keep theirs apart."}
       </Text>
 
       {!project && (
@@ -92,9 +95,14 @@ export default function MemoryScreen() {
           <ToggleRow
             icon="zap"
             title="Save from chats automatically"
-            detail="Pick up what's worth remembering after each reply"
+            detail={
+              memoryModel
+                ? `After each reply, with ${friendly ? friendlyModelName(memoryModel) || memoryModel : memoryModel}`
+                : "After each reply, with the chat's model"
+            }
             value={memoryAuto && memory}
             onValueChange={setMemoryAuto}
+            onPress={() => router.push({ pathname: '/settings/task-model', params: { task: 'memory' } })}
             disabled={!memory}
           />
           {MEMORY_TOOLS.map((entry) => (

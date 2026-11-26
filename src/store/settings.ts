@@ -77,6 +77,8 @@ interface SettingsState {
   titleModel: ModelRef | null;
   /** The model that writes prompt suggestions, or null for the selected model. */
   suggestionModel: ModelRef | null;
+  /** The model that saves memories after each reply, or null for the chat's own model. */
+  memoryModel: ModelRef | null;
   suggestionRefresh: SuggestionRefresh;
   /** Whether providers and models show as brand marks with tidied names instead of raw ids. */
   friendlyModelNames: boolean;
@@ -104,6 +106,7 @@ interface SettingsState {
   setSuggestions: (on: boolean) => void;
   setTitleModel: (ref: ModelRef | null) => void;
   setSuggestionModel: (ref: ModelRef | null) => void;
+  setMemoryModel: (ref: ModelRef | null) => void;
   setSuggestionRefresh: (when: SuggestionRefresh) => void;
   setFriendlyModelNames: (on: boolean) => void;
   setChatDetail: (detail: ChatDetail) => void;
@@ -134,6 +137,7 @@ export const useSettings = create<SettingsState>()(
       suggestions: true,
       titleModel: null,
       suggestionModel: null,
+      memoryModel: null,
       suggestionRefresh: 'launch',
       friendlyModelNames: true,
       chatDetail: 'normal',
@@ -167,7 +171,8 @@ export const useSettings = create<SettingsState>()(
         // Side tasks that used the removed endpoint go back to the chat's model.
         const titleModel = get().titleModel?.endpointId === id ? null : get().titleModel;
         const suggestionModel = get().suggestionModel?.endpointId === id ? null : get().suggestionModel;
-        set({ endpoints, active, efforts, titleModel, suggestionModel });
+        const memoryModel = get().memoryModel?.endpointId === id ? null : get().memoryModel;
+        set({ endpoints, active, efforts, titleModel, suggestionModel, memoryModel });
       },
       setActive: (active) => set({ active }),
       setTheme: (theme) => set({ theme }),
@@ -192,6 +197,7 @@ export const useSettings = create<SettingsState>()(
       setSuggestions: (suggestions) => set({ suggestions }),
       setTitleModel: (titleModel) => set({ titleModel }),
       setSuggestionModel: (suggestionModel) => set({ suggestionModel }),
+      setMemoryModel: (memoryModel) => set({ memoryModel }),
       setSuggestionRefresh: (suggestionRefresh) => set({ suggestionRefresh }),
       setFriendlyModelNames: (friendlyModelNames) => set({ friendlyModelNames }),
       setChatDetail: (chatDetail) => set({ chatDetail }),
@@ -251,6 +257,17 @@ export function resolveEffort(state: Pick<SettingsState, 'endpoints' | 'efforts'
 }
 
 /**
+ * The effort level for a side task that should think: the user's level for the model when it
+ * thinks, otherwise the lowest level that does. Undefined for models without effort control.
+ */
+export function thinkingEffort(state: Pick<SettingsState, 'endpoints' | 'efforts'>, ref: ModelRef) {
+  const resolved = resolveEffort(state, ref);
+  if (!resolved) return undefined;
+  const thinks = (level: string) => level !== 'off' && level !== 'none';
+  return thinks(resolved.level) ? resolved.level : resolved.levels.find(thinks);
+}
+
+/**
  * Tokens of history to aim for: the budget the user set for the model; otherwise three quarters
  * of its reported window (the rest is for the system prompt, tool definitions and the reply);
  * 96K on large-context hosted APIs that don't report one; otherwise 32K, which suits most local servers.
@@ -264,7 +281,7 @@ export function resolveBudget(endpoint: Pick<Endpoint, 'baseUrl' | 'contexts' | 
 }
 
 /**
- * The endpoint and model a side task (titles, suggestions) should use: its own choice while that
+ * The endpoint and model a side task (titles, suggestions, memory) should use: its own choice while that
  * model still exists, otherwise null so the caller falls back to the chat's model.
  */
 export function resolveTaskModel(endpoints: Endpoint[], ref: ModelRef | null) {

@@ -22,7 +22,8 @@ export const MAX_TOTAL_CHARS = 12_000;
 
 export class MemoryError extends Error {}
 
-const normalize = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
+/** A memory's text as compared for duplicates and changes. */
+export const normalize = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
  * Whether a memory belongs to a pool: the shared one (no project) or a project-only project's.

@@ -883,7 +883,7 @@ const memoryUpdate: Tool = {
 
 const memoryForget: Tool = {
   name: 'memory_forget',
-  description: 'Delete a saved memory that is wrong, out of date, or that the user wants forgotten.',
+  description: 'Delete a saved memory that the user wants forgotten or has said is wrong or out of date.',
   parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   async run(input, { conversationId }) {
     const memory = memoryById(conversationId, input.id);

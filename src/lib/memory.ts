@@ -1,19 +1,26 @@
 import { messageText, useChats, type Conversation } from '@/store/chats';
-import { inPool, MemoryError, poolOf, useMemory, type Memory } from '@/store/memory';
-import { useSettings } from '@/store/settings';
+import { inPool, MemoryError, normalize, poolOf, useMemory, type Memory } from '@/store/memory';
+import { resolveTaskModel, thinkingEffort, useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
 import { textMatches, textSnippet } from './context';
 import { canSee, memoryPool } from './projects';
 import { getAdapter, type Endpoint } from './providers';
+import { apiKeys } from './storage';
 import { describeCall } from './tools/describe';
 
 // read_chat returns transcripts this many characters at a time.
 const CHAT_PAGE_CHARS = 20_000;
 // The after-reply pass sees this much of each side of the exchange.
 const EXTRACT_CHARS = 4000;
-const EXTRACT_TIMEOUT = 30_000;
+// The pass thinks before it answers, which can take a while on a slow model; it runs in the background.
+const EXTRACT_TIMEOUT = 120_000;
+// The end of the reply before the user's message, so a short answer like "yes, that one" has context.
+const CONTEXT_CHARS = 1500;
 // At most this many new memories from one exchange, so a confused model can't flood the list.
 const MAX_ADDS = 5;
+// Updates and removals one pass may make. A pass that wants more has misread its task (rewriting
+// or "tidying" memories the exchange never touched), so its changes are dropped, not applied.
+const MAX_CHANGES = 2;
 
 /** Whether a chat uses and saves memories; null is the chat about to be started. */
 export function memoryOn(conversationId: string | null | undefined) {
@@ -62,9 +69,9 @@ export function memorySection(memories: Memory[], opts: { writable: boolean; cha
   if (opts.writable) {
     lines.push(
       'Changes made since this chat began are listed in the context note.',
-      '- Save with memory_save what will be worth knowing in future, unrelated chats: lasting preferences, background, work, ongoing projects and goals, and anything the user asks you to remember. Each memory is one short, self-contained fact in the third person, e.g. "Prefers metric units".',
+      '- Save with memory_save what will be worth knowing in future, unrelated chats: lasting preferences, background, work, ongoing projects and goals, tools and setups they use, and anything the user asks you to remember. Do this on your own initiative whenever the user reveals such a fact, even in passing; don\'t wait to be asked. Each memory is one short, self-contained fact in the third person, e.g. "Prefers metric units".',
       "- Don't save details of the task at hand, things already saved, or sensitive information (health, finances, relationships, beliefs) unless the user asks you to.",
-      '- When the user corrects something saved, change it with memory_update (ids are in brackets); when they ask you to forget it or it stops being true, use memory_forget.',
+      '- When the user corrects something saved, change it with memory_update (ids are in brackets); when they ask you to forget it or tell you it is no longer true, use memory_forget. Leave memories the user did not bring up as they are.',
       "- Save quietly as you go; the user sees it in the chat, so don't mention it unless they asked."
     );
   }
@@ -171,24 +178,45 @@ function parseOps(raw: string): Ops | null {
 
 const array = (v: unknown) => (Array.isArray(v) ? v : []);
 
+// Passes run one at a time, each on the memories the one before left, so two replies finishing
+// close together can't undo or duplicate each other's changes.
+let extracting: Promise<void> = Promise.resolve();
+
 /**
  * After a reply, asks the model whether the exchange holds anything worth remembering and applies
- * what it says. Works without tool calling. Failures are ignored: memory is a nicety.
+ * what it says, using the model picked for it in Settings or else the chat's. Works without tool
+ * calling. Failures are ignored: memory is a nicety.
  */
-export async function extractMemories(
+export function extractMemories(
   conversationId: string,
   replyId: string,
-  endpoint: Endpoint,
-  apiKey: string | undefined,
-  model: string
+  chatEndpoint: Endpoint,
+  chatApiKey: string | undefined,
+  chatModel: string
+) {
+  extracting = extracting
+    .then(() => extractOnce(conversationId, replyId, chatEndpoint, chatApiKey, chatModel))
+    .catch(() => {});
+  return extracting;
+}
+
+async function extractOnce(
+  conversationId: string,
+  replyId: string,
+  chatEndpoint: Endpoint,
+  chatApiKey: string | undefined,
+  chatModel: string
 ) {
   const conversation = useChats.getState().conversations[conversationId];
   const index = conversation?.messages.findIndex((m) => m.id === replyId) ?? -1;
-  if (!conversation || index < 0) return;
-  const user = conversation.messages.slice(0, index).findLast((m) => m.role === 'user');
+  if (!conversation || index < 0 || !memoryOn(conversationId)) return;
+  const userIndex = conversation.messages.slice(0, index).findLastIndex((m) => m.role === 'user');
+  const user = conversation.messages[userIndex];
   const userText = user ? messageText(user).slice(0, EXTRACT_CHARS) : '';
   const replyText = messageText(conversation.messages[index]).slice(0, EXTRACT_CHARS);
   if (!userText.trim()) return;
+  const before = conversation.messages.slice(0, Math.max(0, userIndex)).findLast((m) => m.role === 'assistant');
+  const earlier = before ? messageText(before).slice(-CONTEXT_CHARS).trim() : '';
 
   const pool = memoryPool(conversationId);
   const memories = poolOf(useMemory.getState().memories, pool);
@@ -196,14 +224,27 @@ export async function extractMemories(
     'You keep a memory of facts about the user of a chat app, used to personalise their future conversations. ' +
     'Below are the saved memories and the latest exchange.\n\n' +
     `Saved memories:\n${memories.length ? listed(memories) : '(none)'}\n\n` +
+    (earlier ? `The assistant's previous message, only to make sense of the user's reply:\n<earlier>\n${earlier}\n</earlier>\n\n` : '') +
     `Latest exchange:\n<user>\n${userText}\n</user>\n<assistant>\n${replyText}\n</assistant>\n\n` +
-    'Decide whether the user revealed anything worth remembering in future, unrelated chats: lasting preferences, ' +
-    'their background, work, ongoing projects and goals, or something they asked to be remembered. ' +
-    "Don't save details of the task at hand, what the assistant said, guesses, things already saved, or sensitive " +
-    'information (health, finances, relationships, beliefs) unless the user asked for it to be remembered. ' +
-    'If the user corrected or contradicted a saved memory, update or remove it. Most exchanges need no change.\n\n' +
+    "Decide whether the user's latest message reveals anything worth remembering in future, unrelated chats: lasting " +
+    'preferences, their background, work, ongoing projects and goals, tools and setups they use, or something they ' +
+    'asked to be remembered. Save these on your own initiative, including facts mentioned in passing: the user does ' +
+    'not need to ask. What you save must come from the user, though: not what the assistant said or assumed, not ' +
+    "guesses, not text the user pasted or quoted (documents, code, other people's words, role-play), not one-off " +
+    'details of the task at hand, and not things already saved. Leave out sensitive information (health, finances, ' +
+    'relationships, beliefs) unless the user asked for it to be remembered.\n\n' +
+    "When the user's latest message corrects a saved memory or adds to it, update that memory (one memory per fact, " +
+    'so update rather than adding a near-copy). Remove one when the user asks for it to be forgotten or says it is no ' +
+    'longer true. Never change or remove a memory the exchange does not bear on, even one that seems unimportant.\n\n' +
     'Reply with JSON only, no other text: {"add": ["short third-person fact", ...], "update": [{"id": "...", "text": "..."}], "remove": ["id", ...]}. ' +
     'Use empty arrays when nothing changes.';
+
+  // A model picked for memory in Settings wins over the chat's own, while it still exists.
+  const settings = useSettings.getState();
+  const picked = resolveTaskModel(settings.endpoints, settings.memoryModel);
+  const endpoint = picked?.endpoint ?? chatEndpoint;
+  const model = picked?.model ?? chatModel;
+  const apiKey = picked && picked.endpoint.id !== chatEndpoint.id ? (await apiKeys.get(endpoint.id)) ?? undefined : chatApiKey;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT);
@@ -213,7 +254,8 @@ export async function extractMemories(
       endpoint,
       apiKey,
       model,
-      effort: endpoint.efforts?.[model]?.[0],
+      // Deciding what is a lasting fact, and whether it corrects a saved one, goes better with thinking.
+      effort: thinkingEffort(settings, { endpointId: endpoint.id, model }),
       signal: controller.signal,
       messages: [{ role: 'user', images: [], text: prompt }],
       onToken: (t) => (raw += t),
@@ -227,6 +269,13 @@ export async function extractMemories(
   const ops = parseOps(raw);
   // The user may have turned memory off for the chat while this ran.
   if (!ops || !memoryOn(conversationId)) return;
+  const updates = array(ops.update).flatMap((u) => {
+    const old = u && typeof u.text === 'string' ? memoryInPool(conversationId, u.id) : undefined;
+    return old && normalize(old.text) !== normalize(u.text) ? [{ id: old.id, text: u.text as string }] : [];
+  });
+  const removes = [...new Set(array(ops.remove))].flatMap((id) => memoryInPool(conversationId, id) ?? []);
+  const changesOk = updates.length + removes.length <= MAX_CHANGES;
+
   const store = useMemory.getState();
   const saved: string[] = [];
   const attempt = (fn: () => void, label: string) => {
@@ -240,12 +289,9 @@ export async function extractMemories(
   for (const text of array(ops.add).slice(0, MAX_ADDS)) {
     if (typeof text === 'string') attempt(() => store.add(text, 'auto', conversationId, pool), text.trim());
   }
-  for (const u of array(ops.update)) {
-    if (u && typeof u.text === 'string' && memoryInPool(conversationId, u.id)) attempt(() => store.update(u.id, u.text), u.text.trim());
-  }
-  for (const id of array(ops.remove)) {
-    const old = memoryInPool(conversationId, id);
-    if (old) attempt(() => store.remove(old.id), `Forgot: ${old.text}`);
+  if (changesOk) {
+    for (const u of updates) attempt(() => store.update(u.id, u.text), u.text.trim());
+    for (const old of removes) attempt(() => store.remove(old.id), `Forgot: ${old.text}`);
   }
   if (saved.length) useChats.getState().updateMessage(conversationId, replyId, { memorySaved: saved });
 }

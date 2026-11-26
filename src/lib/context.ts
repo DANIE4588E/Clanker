@@ -115,6 +115,13 @@ function applied(units: Unit[], blocks: CompressionBlock[]) {
   return out.filter((r, i) => i === 0 || r.start > out[i - 1].end);
 }
 
+/** Keys of the units inside compressed blocks: the model no longer sees them or their notes. */
+export function compressedKeys(units: Unit[], blocks: CompressionBlock[]) {
+  const keys = new Set<string>();
+  for (const r of applied(units, blocks)) for (let i = r.start; i <= r.end; i++) keys.add(units[i].key);
+  return keys;
+}
+
 function rangeLabel(units: Unit[], start: number, end: number) {
   const refs = units.slice(start, end + 1).flatMap((u) => (u.ref ? [u.ref] : []));
   if (!refs.length) return '';

@@ -1,9 +1,9 @@
 import { Platform } from 'react-native';
 import { useChats } from '@/store/chats';
 import { useSettings } from '@/store/settings';
-import { formatTokens, historyOf, historyTokens, unitsOf } from '../context';
+import { compressedKeys, formatTokens, historyOf, historyTokens, unitsOf } from '../context';
 import { describeJob, jobsOf } from '../jobs';
-import { memoriesFor, memoryDiff, memoryOn, memorySection } from '../memory';
+import { currentMemories, memoriesFor, memoryDiff, memoryOn, memorySection } from '../memory';
 import { projectSection, workspaceFor } from '../projects';
 import { formatSize } from '../workspace';
 import { toolOn } from './index';
@@ -182,11 +182,13 @@ export function agentSystemPrompt() {
  * The whole system prompt of a chat: the agent prompt when it has tools, its project's
  * instructions when it is in one, and its memories when memory is on. Undefined when there is none
  * of these. Stays the same through a chat as long as the tool and project settings do, since the
- * memories shown are the chat's snapshot.
+ * memories shown with tools are the chat's snapshot. Without tools they change as memory does.
  */
 export function systemPrompt(conversationId: string | null, withTools: boolean) {
+  // Without tools there are no context notes to carry memory changes, so the prompt shows memory as
+  // it is now rather than the chat's snapshot.
   const memory = memoryOn(conversationId)
-    ? memorySection(memoriesFor(conversationId), {
+    ? memorySection(withTools ? memoriesFor(conversationId) : currentMemories(conversationId), {
         writable: withTools && toolOn('memory_save', conversationId),
         chats: withTools && toolOn('search_chats', conversationId),
       })
@@ -214,17 +216,18 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
         .map((e) => `- ${e.path} (${formatSize(e.size)})`)
         .join('\n') + (entries.length > 40 ? '\n- … (use list_files for the rest)' : '')
     : '(empty)';
-  // The listing is repeated only when it changed since the last note that showed it.
+  // The listing is repeated only when it changed since the last note that showed it. Notes inside
+  // compressed blocks no longer reach the model, so they don't count as shown.
   const notes = conversation.notes ?? {};
-  const shown = units
-    .slice(0, -1)
+  const hidden = compressedKeys(units, conversation.compressions ?? []);
+  const earlier = units.slice(0, -1).filter((u) => !hidden.has(u.key));
+  const shown = earlier
     .map((u) => notes[u.key]?.workspace)
     .findLast((w) => w != null);
   const jobs = jobsOf(opts.conversationId);
   // Memory changes since the chat's snapshot, likewise repeated only when they changed.
   const memory = memoryOn(opts.conversationId) ? memoryDiff(conversation) : undefined;
-  const memoryShown = units
-    .slice(0, -1)
+  const memoryShown = earlier
     .map((u) => notes[u.key]?.memory)
     .findLast((m) => m != null);
   const memoryNew = memory != null && memory !== (memoryShown ?? '');

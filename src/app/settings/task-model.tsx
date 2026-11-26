@@ -7,7 +7,7 @@ import { PROVIDER_LABELS } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import { resolveTaskModel, useSettings, type ModelRef, type SuggestionRefresh } from '@/store/settings';
 
-type Task = 'title' | 'suggestions';
+type Task = 'title' | 'suggestions' | 'memory';
 
 const REFRESHES: { value: SuggestionRefresh; label: string; icon: 'calendar' | 'power' | 'plus-square' }[] = [
   { value: 'daily', label: 'Daily', icon: 'calendar' },
@@ -42,29 +42,50 @@ const TASKS = {
     fallback: 'The selected model',
     fallbackDetail: 'Whichever model is picked for new chats',
   },
+  memory: {
+    screen: 'Save memories automatically',
+    icon: 'zap',
+    toggle: 'Save from chats automatically',
+    detail: "Pick up what's worth remembering after each reply",
+    intro:
+      'After each reply, a short extra request asks a model whether the exchange holds anything worth remembering, or corrects a saved memory. It thinks before answering, so a capable model gives the best results.',
+    fallback: "The chat's model",
+    fallbackDetail: 'Whichever model the chat uses',
+  },
 } as const;
 
-/** Settings → General → Generate titles / Suggested prompts: turn it on or off and pick its model. */
+/**
+ * Settings → General → Generate titles / Suggested prompts, and Settings → Memory → Save from chats
+ * automatically: turn it on or off and pick its model.
+ */
 export default function TaskModelScreen() {
   const { colors } = useTheme();
   const { task: param } = useLocalSearchParams<{ task?: string }>();
-  const task: Task = param === 'suggestions' ? 'suggestions' : 'title';
+  const task: Task = param === 'suggestions' || param === 'memory' ? param : 'title';
   const copy = TASKS[task];
 
   const endpoints = useSettings((s) => s.endpoints);
   const friendly = useSettings((s) => s.friendlyModelNames);
-  const on = useSettings((s) => (task === 'title' ? s.titleGeneration : s.suggestions));
-  const chosen = useSettings((s) => (task === 'title' ? s.titleModel : s.suggestionModel));
+  const on = useSettings((s) =>
+    task === 'title' ? s.titleGeneration : task === 'memory' ? s.memoryAuto && s.memory : s.suggestions
+  );
+  // Saving automatically needs memory itself on.
+  const memoryOff = useSettings((s) => task === 'memory' && !s.memory);
+  const chosen = useSettings((s) =>
+    task === 'title' ? s.titleModel : task === 'memory' ? s.memoryModel : s.suggestionModel
+  );
   const refresh = useSettings((s) => s.suggestionRefresh);
   const setRefresh = useSettings((s) => s.setSuggestionRefresh);
   const setOn = (value: boolean) => {
     const s = useSettings.getState();
     if (task === 'title') s.setTitleGeneration(value);
+    else if (task === 'memory') s.setMemoryAuto(value);
     else s.setSuggestions(value);
   };
   const choose = (ref: ModelRef | null) => {
     const s = useSettings.getState();
     if (task === 'title') s.setTitleModel(ref);
+    else if (task === 'memory') s.setMemoryModel(ref);
     else s.setSuggestionModel(ref);
   };
   // A choice whose model has since gone counts as the fallback, as it does when generating.
@@ -75,8 +96,15 @@ export default function TaskModelScreen() {
       <Stack.Screen options={{ title: copy.screen }} />
       <Text style={[styles.intro, { color: colors.textTertiary }]}>{copy.intro}</Text>
 
-      <Section>
-        <ToggleRow icon={copy.icon} title={copy.toggle} detail={copy.detail} value={on} onValueChange={setOn} />
+      <Section footer={memoryOff ? 'Turn on memory to save from chats.' : undefined}>
+        <ToggleRow
+          icon={copy.icon}
+          title={copy.toggle}
+          detail={copy.detail}
+          value={on}
+          onValueChange={setOn}
+          disabled={memoryOff}
+        />
       </Section>
 
       {task === 'suggestions' && on && (
