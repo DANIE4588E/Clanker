@@ -19,6 +19,23 @@
 - Fewer messages stay rendered off screen, and only the ones on screen glide as a reply wraps to a new line.
 - The context meter no longer re-measures every tool call in the chat each second.
 
+## Replies pick up after the app closes
+- A reply that was still being written when the app was closed (or killed by your phone) now **carries on by itself** the next time you open Clanker, in place and with the chat's own model, as if you'd tapped Continue. Messages you queued behind it go out once it's done, and an active goal keeps going.
+- If the app closes again before that reply finishes, it waits for you to tap Continue instead of starting over at every launch, so a reply that crashes the app can't keep crashing it.
+
+## /compact
+- **/compact** has the chat's model write a detailed summary of the conversation so far, which then **takes the place of that history** for the model, freeing up context while keeping what matters: your requests and instructions, files touched, decisions, errors and where the work stands. `/compact <focus>` tells it what to keep in most detail.
+- A **Compacting** chip above the box shows while it works (✕ cancels it); messages you send meanwhile wait and go out once it's done. Your messages stay on screen, and a **Compacted · 48K → 2.1K tokens** line marks the spot; tap it to read the summary. Models can still search and restore the original messages.
+
+## Study: quizzes, flashcards, slides, diagrams and circuits
+- A new built-in **Study** plugin (Plugins → Learning, no account needed). Once added, **every chat** can draw interactive study material and diagrams right in replies:
+  - **Quizzes**, one question at a time: pick an answer and it turns green or red with an explanation for each option, with a **hint** button, copy, and a final score. **Review mistakes** sends your wrong answers back to the chat to go through, or ask for a harder quiz.
+  - **Flashcards**: tap to flip, sort into **Got it** and **Still learning**, shuffle, then practise the ones you missed or get quizzed on them.
+  - **Slides**: a deck you page through in the chat, with speaker notes, and a button to turn it into a PowerPoint file.
+  - **Diagrams**: flowcharts, sequence, state, class and ER diagrams, mind maps, timelines and more, drawn with Mermaid. Tap one to open it full screen and pinch to zoom.
+  - **Circuits**: electrical schematics (resistors, capacitors, inductors, sources, diodes and LEDs, switches, lamps, meters, ground) and **logic-gate** diagrams, drawn by the app so they work offline.
+- **/study** turns on **study mode** for a chat, shown by a chip above the box; `/study off` or the chip's ✕ ends it. It only changes how the model teaches: it guides you to answers instead of handing them over, teaches step by step, tests you one question at a time, helps you find your own mistakes and adapts to how you are doing. Diagrams and the rest work without it.
+
 ## Under the hood
 - Plan mode, goals and todo lists are reported to the model in the per-step context note only when they change, and the system prompt only names the tools that are turned on.
 
