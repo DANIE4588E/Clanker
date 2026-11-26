@@ -1,4 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
+import * as Haptics from '@/lib/haptics';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, AppState, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
@@ -6,6 +7,9 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { ChatHeader } from '@/components/ChatHeader';
+import { chatScreenActions } from '@/components/ChatMenu';
+import { ContextMenu, type MenuAnchor } from '@/components/ContextMenu';
+import { FindBar } from '@/components/FindBar';
 import { composerGrowth } from '@/components/Composer';
 import { COMPOSER_FADE, ComposerDock } from '@/components/ComposerDock';
 import { EdgeFade } from '@/components/EdgeFade';
@@ -101,6 +105,16 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   // Only the screen in front takes them, with a project chat open over the main one.
   useFocusEffect(useCallback(() => addAskListener(addQuote), [addQuote]));
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
+  // Find in chat: the bar takes the header's place, for the chat it was opened in (another chat,
+  // or a new one, closes it); `find` is what it marks in the messages and the one it shows.
+  const [findIn, setFindIn] = useState<string | null>(null);
+  const finding = !!currentId && findIn === currentId;
+  const [find, setFind] = useState<{ needle: string; focusId: string | null } | null>(null);
+  const closeFind = useCallback(() => {
+    setFindIn(null);
+    setFind(null);
+  }, []);
   // The conversation runs under the floating header and composer; these are their measured
   // heights (fade included) so content can rest clear of them. The composer's is measured
   // collapsed, and its growth while expanding is added on the UI thread: measuring it every
@@ -243,6 +257,23 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     }
   }, [currentId, streaming]);
 
+  const newChat = useCallback(() => {
+    const projectId = currentId ? useChats.getState().conversations[currentId]?.projectId : undefined;
+    if (projectId) useUI.getState().openNewInProject(projectId);
+    else open(null);
+  }, [currentId, open]);
+
+  // The chat's menu, built when it opens so it shows the chat as it is then (pinned, archived).
+  const menuChat = menuAnchor && currentId ? useChats.getState().conversations[currentId] : undefined;
+  const menuItems = menuChat
+    ? chatScreenActions(menuChat, {
+        onNewChat: newChat,
+        onFind: () => setFindIn(currentId),
+        // An archived or deleted chat leaves the screen: back to the project, or to a new chat.
+        onLeave: onBack ?? (() => open(null)),
+      })
+    : [];
+
   // The header title: raw ids, or with friendly names the brand mark plus a tidied model name.
   // A remote chat carries its backend's mark (Hermes / DeepSeek Harness); local ones carry none.
   const rawTitle = remote ? (conversation?.model ?? remoteModel ?? backendName) : (active?.model ?? 'Clanker');
@@ -266,6 +297,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
               busy={streaming}
               topInset={topInset}
               bottomInset={bottomInset}
+              find={finding ? find : null}
             />
           ) : (
             <Animated.View style={[styles.container, { paddingTop: topInset }, emptyInsetStyle]}>
@@ -311,24 +343,33 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
         style={styles.headerArea}
       >
         <EdgeFade solid="top" style={StyleSheet.absoluteFill} />
-        <ChatHeader
-          title={title}
-          onMenu={onMenu}
-          onBack={onBack}
-          onTitle={() => setPickerOpen(true)}
-          backend={remote ? backendName : undefined}
-          brand={titleBrand}
-          onNewChat={
-            currentId
-              ? () => (conversation?.projectId ? useUI.getState().openNewInProject(conversation.projectId) : open(null))
-              : undefined
-          }
-          memoryOff={memoryOff}
-          onToggleMemory={
-            !currentId && memorySetting && !remote ? () => useUI.getState().setNewChatMemoryOff(!newChatMemoryOff) : undefined
-          }
-        />
+        {finding ? (
+          <FindBar conversationId={currentId} onClose={closeFind} onChange={setFind} />
+        ) : (
+          <ChatHeader
+            title={title}
+            onMenu={onMenu}
+            onBack={onBack}
+            onTitle={() => setPickerOpen(true)}
+            backend={remote ? backendName : undefined}
+            brand={titleBrand}
+            onMore={
+              currentId
+                ? (anchor) => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setMenuAnchor(anchor);
+                  }
+                : undefined
+            }
+            memoryOff={memoryOff}
+            onToggleMemory={
+              !currentId && memorySetting && !remote ? () => useUI.getState().setNewChatMemoryOff(!newChatMemoryOff) : undefined
+            }
+          />
+        )}
       </View>
+
+      <ContextMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} />
 
       <ModelPicker visible={pickerOpen} onClose={() => setPickerOpen(false)} conversationId={currentId} />
     </View>

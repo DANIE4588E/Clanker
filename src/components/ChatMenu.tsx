@@ -1,6 +1,8 @@
 import * as Haptics from '@/lib/haptics';
+import { router } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { stopStreaming } from '@/lib/chat';
+import { shareChat } from '@/lib/chatExport';
 import { moveChatToProject } from '@/lib/projects';
 import { useChats, type Conversation } from '@/store/chats';
 import { useProjects } from '@/store/projects';
@@ -61,7 +63,7 @@ function chooseProject(c: Conversation) {
   });
 }
 
-export function confirmDeleteChat(c: Conversation) {
+export function confirmDeleteChat(c: Conversation, after?: () => void) {
   confirm({
     title: 'Delete chat?',
     message: `"${c.title}"${c.projectId || c.workspace ? '' : ' and its files'} will be deleted. This can't be undone.`,
@@ -71,19 +73,54 @@ export function confirmDeleteChat(c: Conversation) {
       stopStreaming(c.id);
       useChats.getState().remove(c.id);
       if (useUI.getState().currentId === c.id) useUI.getState().open(null);
+      after?.();
     },
   });
 }
 
+const pinAction = (c: Conversation): MenuItem => ({
+  label: c.pinnedAt ? 'Unpin' : 'Pin',
+  icon: { mci: c.pinnedAt ? 'pin-off-outline' : 'pin-outline' },
+  onPress: () => useChats.getState().setPinned(c.id, !c.pinnedAt),
+});
+
+const projectAction = (c: Conversation, more?: boolean): MenuItem => ({
+  label: c.projectId ? 'Move to project' : 'Add to project',
+  icon: { feather: 'folder-plus' },
+  more,
+  onPress: () => chooseProject(c),
+});
+
+/** `after` runs once the chat is archived, to leave it when it is the one on screen. */
+const archiveAction = (c: Conversation, after?: () => void): MenuItem =>
+  c.archivedAt
+    ? { label: 'Unarchive', icon: { feather: 'archive' }, onPress: () => useChats.getState().setArchived(c.id, false) }
+    : {
+        label: 'Archive',
+        icon: { feather: 'archive' },
+        onPress: () =>
+          confirm({
+            title: 'Archive chat?',
+            message: `"${c.title}" will be hidden from your chats. To see archived chats again, turn on Show archived chats in Settings.`,
+            confirmLabel: 'Archive',
+            onConfirm: () => {
+              useChats.getState().setArchived(c.id, true);
+              after?.();
+            },
+          }),
+      };
+
+const deleteAction = (c: Conversation, after?: () => void): MenuItem => ({
+  label: 'Delete',
+  icon: { feather: 'trash-2' },
+  destructive: true,
+  onPress: () => confirmDeleteChat(c, after),
+});
+
 /** The actions on a chat, for its long-press menu. */
 export function chatActions(c: Conversation): MenuItem[] {
-  const chats = useChats.getState();
   return [
-    {
-      label: c.pinnedAt ? 'Unpin' : 'Pin',
-      icon: { mci: c.pinnedAt ? 'pin-off-outline' : 'pin-outline' },
-      onPress: () => chats.setPinned(c.id, !c.pinnedAt),
-    },
+    pinAction(c),
     {
       label: 'Rename',
       icon: { feather: 'edit-2' },
@@ -96,25 +133,41 @@ export function chatActions(c: Conversation): MenuItem[] {
           onSubmit: (title) => useChats.getState().rename(c.id, title),
         }),
     },
+    projectAction(c),
+    archiveAction(c),
+    deleteAction(c),
+  ];
+}
+
+/**
+ * The menu behind the dots in the header of the chat on screen. `onLeave` takes the screen off the
+ * chat once it is archived or deleted; `onFind` opens the find bar.
+ */
+export function chatScreenActions(
+  c: Conversation,
+  { onNewChat, onFind, onLeave }: { onNewChat: () => void; onFind: () => void; onLeave: () => void }
+): MenuItem[] {
+  return [
+    { label: 'New chat', icon: { feather: 'edit' }, onPress: onNewChat },
     {
-      label: c.projectId ? 'Move to project' : 'Add to project',
-      icon: { feather: 'folder-plus' },
-      onPress: () => chooseProject(c),
+      label: 'Share',
+      icon: { feather: 'share' },
+      onPress: () => {
+        // Read again: the chat may have moved on since the menu opened.
+        const latest = useChats.getState().conversations[c.id] ?? c;
+        shareChat(latest).catch((e) => notify('Could not share the chat', e instanceof Error ? e.message : String(e)));
+      },
     },
-    c.archivedAt
-      ? { label: 'Unarchive', icon: { feather: 'archive' }, onPress: () => chats.setArchived(c.id, false) }
-      : {
-          label: 'Archive',
-          icon: { feather: 'archive' },
-          onPress: () =>
-            confirm({
-              title: 'Archive chat?',
-              message: `"${c.title}" will be hidden from your chats. To see archived chats again, turn on Show archived chats in Settings.`,
-              confirmLabel: 'Archive',
-              onConfirm: () => useChats.getState().setArchived(c.id, true),
-            }),
-        },
-    { label: 'Delete', icon: { feather: 'trash-2' }, destructive: true, onPress: () => confirmDeleteChat(c) },
+    pinAction(c),
+    projectAction(c, true),
+    {
+      label: 'Uploaded files',
+      icon: { feather: 'paperclip' },
+      onPress: () => router.push({ pathname: '/chats/files', params: { id: c.id } }),
+    },
+    { label: 'Find in chat', icon: { feather: 'search' }, onPress: onFind },
+    archiveAction(c, onLeave),
+    deleteAction(c, onLeave),
   ];
 }
 

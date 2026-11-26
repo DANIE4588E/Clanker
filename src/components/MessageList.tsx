@@ -38,6 +38,7 @@ import Animated, {
 import { setStorageWriteDeferred } from '@/lib/storage';
 import { useTheme } from '@/lib/theme';
 import { useChats, type Message } from '@/store/chats';
+import { FindContext, type FindTarget } from './FindHighlight';
 import { MessageBubble } from './MessageBubble';
 import { ChatScrollContext, useJsScrollRelay, type ChatScrollHandle } from './NestedScroll';
 
@@ -115,9 +116,25 @@ type Props = {
   // The composer's is a shared value: it follows the box's expand animation on the UI thread.
   topInset: number;
   bottomInset: SharedValue<number>;
+  /** Find in chat: the text to mark in every message, and the message to bring into view. */
+  find?: { needle: string; focusId: string | null } | null;
 };
 
-export const MessageList = memo(function MessageList({ conversationId, onRegenerate, onEdit, onBranch, busy, topInset, bottomInset }: Props) {
+export const MessageList = memo(function MessageList({
+  conversationId,
+  onRegenerate,
+  onEdit,
+  onBranch,
+  busy,
+  topInset,
+  bottomInset,
+  find,
+}: Props) {
+  const focusId = find?.focusId ?? null;
+  const needle = find?.needle ?? '';
+  // One value for the found message and one for the rest, so other cells don't re-render.
+  const findCurrent = useMemo<FindTarget>(() => (needle ? { needle, current: true } : null), [needle]);
+  const findOther = useMemo<FindTarget>(() => (needle ? { needle, current: false } : null), [needle]);
   const { colors } = useTheme();
   const messages = useChats((s) => s.conversations[conversationId]?.messages ?? NO_MESSAGES);
   const listRef = useRef<FlatList<Message>>(null);
@@ -338,6 +355,42 @@ export const MessageList = memo(function MessageList({ conversationId, onRegener
     listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, [conversationId, outerDriving, outerFlingToken, pinnedSV]);
 
+  // Find in chat: the found message's top is brought to just under the header. Inverted, the
+  // list's far end is the screen's top, so viewPosition 1 lines the message's top up with it.
+  const focusRetries = useRef(0);
+  const scrollToFocus = useCallback(
+    (index: number, animated: boolean) => {
+      listRef.current?.scrollToIndex({ index, viewPosition: 1, viewOffset: -(topInset + 8), animated });
+    },
+    [topInset],
+  );
+  useEffect(() => {
+    if (!focusId) return;
+    const index = data.findIndex((m) => m.id === focusId);
+    if (index < 0) return;
+    // Unpinned first, or onScroll would snap the list straight back to the bottom. The pinned
+    // state for rendering follows from onScroll as the list moves.
+    pinnedRef.current = false;
+    pinnedSV.set(false);
+    userScrollingRef.current = false;
+    if (useJsScrollRelay) {
+      outerFlingToken.set(outerFlingToken.get() + 1);
+      outerDriving.set(false);
+    }
+    focusRetries.current = 0;
+    scrollToFocus(index, true);
+    // Only a new match scrolls; the list changing as a reply streams leaves the view alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
+  const onScrollToIndexFailed = useCallback(
+    (info: { index: number; averageItemLength: number }) => {
+      // Not laid out yet: jump near it so it renders, then aim again.
+      listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+      if (focusRetries.current++ < 5) setTimeout(() => scrollToFocus(info.index, false), 60);
+    },
+    [scrollToFocus],
+  );
+
   const spacerStyle = useAnimatedStyle(() => ({ height: bottomInset.value }));
   const jumpStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -bottomInset.value }] }));
   const listHeader = useMemo(() => <Animated.View style={spacerStyle} />, [spacerStyle]);
@@ -348,17 +401,19 @@ export const MessageList = memo(function MessageList({ conversationId, onRegener
 
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<Message>) => (
-      <MessageBubble
-        conversationId={conversationId}
-        message={item}
-        isLast={item.id === lastAssistantId}
-        onRegenerate={onRegenerate}
-        onEdit={onEdit}
-        onBranch={onBranch}
-        busy={busy}
-      />
+      <FindContext.Provider value={item.id === focusId ? findCurrent : findOther}>
+        <MessageBubble
+          conversationId={conversationId}
+          message={item}
+          isLast={item.id === lastAssistantId}
+          onRegenerate={onRegenerate}
+          onEdit={onEdit}
+          onBranch={onBranch}
+          busy={busy}
+        />
+      </FindContext.Provider>
     ),
-    [conversationId, lastAssistantId, onRegenerate, onEdit, onBranch, busy],
+    [conversationId, lastAssistantId, onRegenerate, onEdit, onBranch, busy, focusId, findCurrent, findOther],
   );
 
   return (
@@ -389,6 +444,7 @@ export const MessageList = memo(function MessageList({ conversationId, onRegener
             scrollsChildToFocus={false}
             renderScrollComponent={useJsScrollRelay ? renderScrollComponent : undefined}
             onScroll={onScroll}
+            onScrollToIndexFailed={onScrollToIndexFailed}
             onScrollBeginDrag={onScrollBeginDrag}
             onScrollEndDrag={onScrollEndDrag}
             onMomentumScrollEnd={onMomentumScrollEnd}

@@ -1,5 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef } from 'react';
+import { Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandIcon, type BrandId } from './BrandIcon';
 import { useTheme } from '@/lib/theme';
@@ -11,10 +12,11 @@ type Props = {
   /** Given on a project's chat: a back button to the project in place of the sidebar button. */
   onBack?: () => void;
   onTitle?: () => void;
-  onNewChat?: () => void;
+  /** Given on a started chat: opens its menu, below the point given (the button's bottom right). */
+  onMore?: (anchor: { x: number; y: number }) => void;
   /** Memory is off for this chat (or the one about to be started). */
   memoryOff?: boolean;
-  /** Given on a new chat: flips memory for it, in place of the new-chat button. */
+  /** Given on a new chat: flips memory for it, in place of the menu button. */
   onToggleMemory?: () => void;
   /** The remote backend this chat runs on, marked on the title; unset for the built-in agent. */
   backend?: string;
@@ -22,8 +24,11 @@ type Props = {
   brand?: BrandId;
 };
 
-export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOff, onToggleMemory, backend, brand }: Props) {
+export function ChatHeader({ title, onMenu, onBack, onTitle, onMore, memoryOff, onToggleMemory, backend, brand }: Props) {
   const { colors } = useTheme();
+  const moreRef = useRef<HostInstance>(null);
+  const openMore = () =>
+    moreRef.current?.measureInWindow((x, y, width, height) => onMore?.({ x: x + width, y: y + height + 4 }));
   const insets = useSafeAreaInsets();
   const circle = [styles.circle, { backgroundColor: colors.chrome, borderColor: colors.chromeBorder }];
 
@@ -79,7 +84,7 @@ export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOf
         </Pressable>
       </View>
 
-      {!onNewChat && onToggleMemory ? (
+      {!onMore && onToggleMemory ? (
         // Like ChatGPT's temporary chat button: a new chat can leave memory out.
         <Pressable
           onPress={onToggleMemory}
@@ -93,13 +98,15 @@ export function ChatHeader({ title, onMenu, onBack, onTitle, onNewChat, memoryOf
         </Pressable>
       ) : (
         <Pressable
-          onPress={onNewChat}
-          disabled={!onNewChat}
+          ref={moreRef}
+          onPress={openMore}
+          disabled={!onMore}
           hitSlop={6}
-          style={({ pressed }) => [circle, !onNewChat && { opacity: 0 }, pressed && { opacity: 0.6 }]}
-          accessibilityLabel="New chat"
+          style={({ pressed }) => [circle, !onMore && { opacity: 0 }, pressed && { opacity: 0.6 }]}
+          accessibilityLabel="Chat menu"
+          accessibilityRole="button"
         >
-          <Feather name="edit" size={19} color={colors.text} />
+          <Feather name="more-horizontal" size={21} color={colors.text} />
         </Pressable>
       )}
     </View>

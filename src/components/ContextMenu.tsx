@@ -14,6 +14,8 @@ export type MenuItem = {
   icon: MenuIcon;
   onPress: () => void;
   destructive?: boolean;
+  /** Marks a row that leads on to another choice (a list of projects, say) with a chevron. */
+  more?: boolean;
 };
 
 /** Where the menu opens: the screen point that was pressed. */
@@ -115,6 +117,7 @@ export function ContextMenu({
             >
               <MenuGlyph icon={item.icon} size={21} color={color} />
               <Text style={[styles.label, { color }]}>{item.label}</Text>
+              {item.more && <Feather name="chevron-right" size={18} color={colors.textTertiary} />}
             </Pressable>
           );
         })}
@@ -137,5 +140,5 @@ const styles = StyleSheet.create({
     elevation: 16,
   },
   row: { height: ROW, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20 },
-  label: { fontSize: 17 },
+  label: { fontSize: 17, flex: 1 },
 });

@@ -8,6 +8,7 @@ import { fonts, useTheme, type Colors } from '@/lib/theme';
 import { useWorkspace } from '@/lib/useWorkspace';
 import { Chart, parseChart } from './Chart';
 import { CodeBlock } from './CodeBlock';
+import { useFindMarker, type Marker } from './FindHighlight';
 import { ChatImage, ImageCards, parseImages } from './ImageCards';
 import { MarkdownTable } from './MarkdownTable';
 import { InlineMath, MathBlock } from './MathView';
@@ -33,9 +34,15 @@ class ChatRenderer extends Renderer {
     private mentions: FileMentions | null,
     private linkColor: string,
     /** Off inside a selection area, which selects the text across blocks itself. */
-    private textSelectable: boolean
+    private textSelectable: boolean,
+    /** Highlights find-in-chat matches in the text; null while not finding. */
+    private mark: Marker | null = null
   ) {
     super({ selectable: textSelectable });
+  }
+
+  private marked(text: string | ReactNode[]): string | ReactNode[] {
+    return typeof text === 'string' && this.mark ? this.mark(text) : text;
   }
 
   private open(path: string) {
@@ -89,7 +96,7 @@ class ChatRenderer extends Renderer {
       }
       if (this.live) return <Pending key={this.getKey()} label="Loading images…" />;
     }
-    return <CodeBlock key={this.getKey()} code={text} language={language} streaming={this.live} />;
+    return <CodeBlock key={this.getKey()} code={text} language={language} streaming={this.live} findable />;
   }
 
   image(uri: string, alt?: string, _style?: ImageStyle, title?: string): ReactNode {
@@ -99,7 +106,8 @@ class ChatRenderer extends Renderer {
   codespan(text: string, styles?: TextStyle): ReactNode {
     if (text.startsWith(INLINE_MATH)) return <InlineMath key={this.getKey()} tex={text.slice(INLINE_MATH.length)} />;
     const path = this.mentions?.resolve(text);
-    if (!path) return super.codespan(text, styles);
+    // The base codespan is a plain text node, which text() makes too, and takes marked text.
+    if (!path) return this.mark ? super.text(this.marked(text), styles) : super.codespan(text, styles);
     return (
       <Text
         selectable={this.textSelectable}
@@ -108,22 +116,22 @@ class ChatRenderer extends Renderer {
         onPress={() => this.open(path)}
         style={[styles, { color: this.linkColor }]}
       >
-        {text}
+        {this.marked(text)}
       </Text>
     );
   }
 
   text(text: string | ReactNode[], styles?: TextStyle): ReactNode {
     const parts = typeof text === 'string' && this.mentions ? this.mentions.split(text) : null;
-    if (!parts || parts.length < 2) return super.text(text, styles);
+    if (!parts || parts.length < 2) return super.text(this.marked(text), styles);
     return (
       <Text selectable={this.textSelectable} key={this.getKey()} style={styles}>
         {parts.map((part, i) =>
           typeof part === 'string' ? (
-            part
+            <Fragment key={i}>{this.marked(part)}</Fragment>
           ) : (
             <Text key={i} accessibilityRole="link" onPress={() => this.open(part.path)} style={{ color: this.linkColor }}>
-              {part.text}
+              {this.marked(part.text)}
             </Text>
           )
         )}
@@ -131,9 +139,31 @@ class ChatRenderer extends Renderer {
     );
   }
 
+  // Inline elements whose text the parser hands over as a plain string, not through text().
+  strong(children: string | ReactNode[], styles?: TextStyle): ReactNode {
+    return super.strong(this.marked(children), styles);
+  }
+
+  em(children: string | ReactNode[], styles?: TextStyle): ReactNode {
+    return super.em(this.marked(children), styles);
+  }
+
+  del(children: string | ReactNode[], styles?: TextStyle): ReactNode {
+    return super.del(this.marked(children), styles);
+  }
+
+  heading(text: string | ReactNode[], styles?: TextStyle): ReactNode {
+    return super.heading(this.marked(text), styles);
+  }
+
+  escape(text: string, styles?: TextStyle): ReactNode {
+    return this.mark ? super.text(this.marked(text), styles) : super.escape(text, styles);
+  }
+
   link(children: string | ReactNode[], href: string, styles?: TextStyle, title?: string): ReactNode {
     // A link to a workspace file ("[report](report.pdf)") opens it rather than going to the web.
     const path = /^(https?|mailto|tel):/i.test(href) ? null : this.mentions?.resolve(href);
+    children = this.marked(children);
     if (!path) return super.link(children, href, styles, title);
     return (
       <Text selectable={this.textSelectable} key={this.getKey()} accessibilityRole="link" onPress={() => this.open(path)} style={styles}>
@@ -220,10 +250,11 @@ const MarkdownBlock = memo(function MarkdownBlock({ value, live }: { value: stri
   );
   const ws = useWorkspace();
   const selectable = useSelectable();
+  const mark = useFindMarker();
   // Made again when the reply finishes (live turns off), so files written while it streamed are found.
   const renderer = useMemo(
-    () => new ChatRenderer(live, ws && new FileMentions(ws), colors.link, selectable),
-    [live, ws, colors.link, selectable]
+    () => new ChatRenderer(live, ws && new FileMentions(ws), colors.link, selectable, mark),
+    [live, ws, colors.link, selectable, mark]
   );
   // useMarkdown parses during this render whenever the text changed.
   renderer.reset();

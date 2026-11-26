@@ -3,9 +3,10 @@ import * as Clipboard from 'expo-clipboard';
 import type { ElementContent, Root } from 'hast';
 import { common, createLowlight } from 'lowlight';
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { fonts, useTheme } from '@/lib/theme';
 import { SKIP_SELECTION } from '../../modules/clanker-selection';
+import { markRanges, matchRanges, useFindStyle, type MatchRange } from './FindHighlight';
 import { HorizontalScroll } from './HorizontalScroll';
 import { useSelectable } from './SelectionArea';
 import { useFadeNodes } from './StreamFade';
@@ -76,16 +77,24 @@ function colorFor(classNames: unknown, palette: Palette): string | undefined {
   return undefined;
 }
 
-function renderNodes(nodes: ElementContent[], palette: Palette, keyPrefix = ''): ReactNode[] {
+/** Find-in-chat matches to mark while rendering: their ranges in the code, and `at`, how far it has got. */
+type Marks = { ranges: MatchRange[]; style: TextStyle; at: number };
+
+function renderNodes(nodes: ElementContent[], palette: Palette, marks: Marks | null, keyPrefix = ''): ReactNode[] {
   return nodes.map((node, i) => {
     const key = `${keyPrefix}${i}`;
-    if (node.type === 'text') return node.value;
+    if (node.type === 'text') {
+      if (!marks) return node.value;
+      const marked = markRanges(node.value, marks.at, marks.ranges, marks.style, `${key}.`);
+      marks.at += node.value.length;
+      return marked;
+    }
     if (node.type !== 'element') return null;
     const color = colorFor(node.properties?.className, palette);
     const italic = Array.isArray(node.properties?.className) && node.properties.className.includes('hljs-comment');
     return (
       <Text key={key} style={[color ? { color } : null, italic ? { fontStyle: 'italic' } : null]}>
-        {renderNodes(node.children, palette, key + '.')}
+        {renderNodes(node.children, palette, marks, key + '.')}
       </Text>
     );
   });
@@ -140,11 +149,14 @@ function CodeBlockInner({
   language,
   live = false,
   streaming = false,
+  findable = false,
 }: {
   code: string;
   language?: string;
   live?: boolean;
   streaming?: boolean;
+  /** Part of a message's text, which find in chat searches, so its matches are marked (not a tool call's code). */
+  findable?: boolean;
 }) {
   const { colors, scheme } = useTheme();
   const palette = palettes[scheme];
@@ -162,11 +174,22 @@ function CodeBlockInner({
       : lang && lowlight.registered(lang)
         ? text.slice(0, catchUpPoint(text))
         : '';
+  // Find in chat's matches, found in the whole code so one may run from the highlighted part
+  // into the plain end. The highlighting itself is kept, and only the marking redone, as they change.
+  const findStyle = useFindStyle();
+  const find = findable ? findStyle : null;
+  const ranges = useMemo(() => (find && !live ? matchRanges(text, find.needle) : []), [find, live, text]);
+  const tree = useMemo(() => (settled ? highlight(settled, lang) : null), [settled, lang]);
   const highlighted = useMemo(() => {
-    const tree = settled ? highlight(settled, lang) : null;
-    return tree ? renderNodes(tree.children as ElementContent[], palette) : settled;
-  }, [settled, lang, palette]);
-  const trailing = !live ? text.slice(settled.length) : '';
+    const marks = find && ranges.length ? { ranges, style: find.style, at: 0 } : null;
+    if (tree) return renderNodes(tree.children as ElementContent[], palette, marks);
+    return marks ? markRanges(settled, 0, ranges, marks.style, 'h') : settled;
+  }, [tree, settled, palette, find, ranges]);
+  const trailingText = !live ? text.slice(settled.length) : '';
+  const trailing = useMemo(
+    () => (find && ranges.length ? markRanges(trailingText, settled.length, ranges, find.style, 't') : trailingText),
+    [find, ranges, trailingText, settled.length]
+  );
   const bodyNodes = useMemo(
     () => (live ? [tail(text)] : [highlighted, trailing]),
     [live, text, highlighted, trailing]

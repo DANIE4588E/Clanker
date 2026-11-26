@@ -30,6 +30,10 @@ const light = {
   danger: '#E02E2A',
   dangerBg: '#FDECEC',
   overlay: 'rgba(0,0,0,0.4)',
+  // Find in chat: every match, and the matches in the message being shown (with their text color).
+  findMatch: 'rgba(255, 200, 0, 0.35)',
+  findCurrent: '#FFB020',
+  findCurrentText: '#0D0D0D',
 };
 
 export type Colors = typeof light;
@@ -63,6 +67,9 @@ const dark: Colors = {
   danger: '#F87171',
   dangerBg: '#3B1F1F',
   overlay: 'rgba(0,0,0,0.6)',
+  findMatch: 'rgba(255, 200, 0, 0.3)',
+  findCurrent: '#FFB020',
+  findCurrentText: '#0D0D0D',
 };
 
 export function useTheme() {

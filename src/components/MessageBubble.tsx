@@ -20,6 +20,7 @@ import { describeCall } from '@/lib/tools/describe';
 import { useSettings } from '@/store/settings';
 import { BrandIcon } from './BrandIcon';
 import { FileIcon } from './FileIcon';
+import { useFindMarker } from './FindHighlight';
 import { brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { RemoteReply } from './RemoteReply';
 import { areasSelect, SelectionArea } from './SelectionArea';
@@ -394,6 +395,8 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
     return c?.endpointId === LOCAL_ENDPOINT_ID && (!c.backendId || c.backendId === 'local') ? c.model : undefined;
   });
   const activity = useActivityLabel(message.status === 'streaming' ? localModel : undefined);
+  // Find in chat's matches, marked in the user's text (replies mark theirs in Markdown).
+  const mark = useFindMarker();
   const stats = formatStats(message.stats, { speed: showSpeed, cache: showCache });
   const text = messageText(message);
   const images = message.content.filter((p): p is ImagePart => p.type === 'image');
@@ -417,7 +420,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           <View key={i} style={[styles.quote, { backgroundColor: colors.surface }]}>
             <Feather name="corner-down-right" size={14} color={colors.textSecondary} style={styles.quoteIcon} />
             <Text numberOfLines={2} style={[styles.quoteText, { color: colors.textSecondary }]}>
-              {q.replace(/\s+/g, ' ')}
+              {mark ? mark(q.replace(/\s+/g, ' ')) : q.replace(/\s+/g, ' ')}
             </Text>
           </View>
         ))}
@@ -426,7 +429,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           <Pressable onLongPress={areasSelect ? undefined : copy} style={[styles.userBubble, { backgroundColor: colors.userBubble }]}>
             <SelectionArea>
               <Text selectable={!areasSelect} style={[styles.userText, { color: colors.text }]}>
-                {asked}
+                {mark ? mark(asked) : asked}
               </Text>
             </SelectionArea>
           </Pressable>
