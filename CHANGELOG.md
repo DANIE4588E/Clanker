@@ -1,3 +1,43 @@
+# Clanker 1.3.0-beta.6
+
+## Plugins: connect your apps and services
+- A new **Plugins** page in the sidebar lists **40 apps** — Google Drive, Docs, Sheets, Gmail, Calendar, Microsoft 365, Notion, Linear, GitHub and more — with an Installed strip, Popular and New sections, search, categories, and a detail page with example prompts and a **Try in chat** button.
+- Signing in happens in your real browser. Most apps connect through their MCP servers with **one tap**: Clanker discovers the server's sign-in, registers itself, and turns its tools into agent tools. Google, Microsoft, Dropbox and Spotify use OAuth, GitHub uses the device flow, and a few take a pasted token.
+- Tools that **change** things stay off until you turn on **Allow changes** for that plugin.
+
+## Skills, including self-improving ones
+- A **Skills** tab lists your skills with switches to offer them to models, a page per skill (instructions, files, source, delete, update from source) and an editor for writing or changing one.
+- Install skills in the SKILL.md format from a **GitHub repository or folder** (pick from collections like anthropics/skills), a link to a `.zip`, `.skill` or `SKILL.md`, or a file on your phone. Chats with tools list their skills and load one on demand with **skill_view**; the list is fixed per chat, so prompts still cache.
+- **Self-improving skills**, after Hermes Agent: models get a skill tool to create, patch and extend skills as they work, and after a heavy reply a background review saves or fixes a skill when the task taught something reusable — noted under the reply. Can be turned off, and given its own model, in Settings → Agent.
+
+## A Library of your files
+- A **Library** in the sidebar lists every file you've attached and every file an agent made for you, across chats: grid or list, **Suggested / Favorites / All** tabs, search, type and ownership filters, multi-select, and a **Deleted** view to restore or purge.
+- Tapping a file opens a preview — images, pages, code, Markdown, documents — with a box to ask about it in a new chat; holding one offers save, chat about it, share, favorite and delete.
+- Agents hand finished files over with a new **present_files** tool, so helper scripts and checks stay out of your Library, and **web pages render live and usable** in chats — under the reply, where it embeds them, and as small live thumbnails in the Library.
+
+## Google Antigravity as a subscription
+- Sign in with your **Google account** in Settings → Subscriptions to chat with **Antigravity's Gemini models** through your subscription — in-app and on remote backends.
+- Per-effort model variants collapse into **one model with effort levels**, and the model's **thoughts stream** live as it works.
+
+## Edit messages and branch chats
+- Editing a message or regenerating a reply now starts a **new version** of the chat from that point and keeps the old one; a "1/2" switcher on the message flips between versions.
+- Any earlier reply can be **branched into a new chat**, which copies its attachments and workspace, is named "(branched)", and opens with your next prompt in the box to edit.
+
+## Chat menu and find in chat
+- The header's new-chat button becomes a **menu**: new chat, **share** (as a Markdown file), pin, add to project, uploaded files, **find in chat**, archive and delete. Find highlights the matching words in messages, replies and their code blocks, and steps through matching messages.
+- The composer hides while finding in chat or typing in a text dialog, so the keyboard no longer lifts it over the dialog's backdrop.
+
+## Answer now
+- While a reply is thinking or working through tools, an **Answer now** button appears: tap it to stop the work and get a real answer from what it has found so far.
+
+## Smaller things
+- Start a new chat by **pulling up past the end** of a finished one: a ring fills as you drag, turns into a new-chat button, and the chat fades out into a fresh one with the keyboard up.
+- **Memory saving is more reliable**: memory changes stay visible after history is compressed, the after-reply pass gets the previous message for context with tighter rules and per-pass caps, and runs with thinking on; pick the **model that saves memories** in Settings.
+- Hyphenated model versions now read with dots (Claude Opus 5.5, Llama 3.1), and OSS stays uppercase.
+- Clanker now has a **homepage, privacy policy and terms** on GitHub Pages.
+
+---
+
 # Clanker 1.3.0-beta.5
 
 ## Run models on your phone (experimental)
