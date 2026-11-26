@@ -1,3 +1,6 @@
+import { pluginOfTool, pluginTools } from '../plugins/catalog';
+import { PLUGIN_LABELS } from './plugins';
+
 const short = (text: string) => (text.length > 60 ? `${text.slice(0, 60).trimEnd()}…` : text);
 
 const linesOf = (v: unknown) => (typeof v === 'string' && v ? v.replace(/\r?\n$/, '').split(/\r?\n/) : []);
@@ -126,6 +129,13 @@ export function describeCall(name: string, input: Record<string, unknown>) {
     case 'phone_list_apps':
       return 'List apps';
     default:
-      return name;
+      return PLUGIN_LABELS[name]?.(input) ?? pluginToolLabel(name) ?? name;
   }
+}
+
+/** "Notion: Search", for plugin tools without a label of their own (an MCP server's). */
+function pluginToolLabel(name: string) {
+  const plugin = pluginOfTool(name);
+  const tool = plugin && pluginTools(plugin).find((t) => t.name === name);
+  return tool ? `${plugin.title}: ${tool.title}` : undefined;
 }

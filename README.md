@@ -66,6 +66,39 @@ For formats with no built-in reader, the model is told to write a script that ha
 
 The Python and JavaScript runtimes run in a hidden WebView and load Pyodide from jsDelivr on first use (cached afterwards). The shell is a local Expo module ([modules/clanker-shell](modules/clanker-shell)), so it needs a development build; it isn't in Expo Go, and iOS can't spawn processes at all.
 
+## Plugins
+
+**Plugins** in the sidebar is a store of apps agents can work in: an **Installed** strip, **Popular**, **New & Noteworthy** and a section per category, with search. Tap **+** to add a plugin: it signs in (or installs at once when its account already allows it) and the row turns into **⋯** (Try in chat, details, settings, remove). Each plugin's page has prompts to try, the account it uses and its details; its settings choose whether agents may change things or only read, and list exactly what they can do. A message starting with **@Plugin** asks the agent to use it.
+
+| Provider | Plugins | Sign-in |
+| --- | --- | --- |
+| Hosted MCP servers | Notion, Linear, Todoist, ClickUp, Jira & Confluence (Atlassian), Miro, Calendly, Granola, Jotform, Attio, Make, PayPal, Sentry, Supabase, Netlify, Neon, Webflow, Wix | One tap: the app registers itself with the service and signs in through the browser; no setup |
+| Hosted MCP servers, no account | Hugging Face, Excalidraw, DeepWiki, Context7 | None |
+| Google | Gmail, Google Calendar, Google Drive, Google Docs, Google Sheets, Google Slides, Google Tasks | One Google account; adding a plugin asks only for its own access (incremental consent) |
+| Microsoft | Outlook, Outlook Calendar, OneDrive, Microsoft To Do | One Microsoft account (personal or work), through Microsoft Graph |
+| GitHub | GitHub | Device code (with an OAuth app) or a personal access token |
+| Figma, Asana, Airtable | one each | A token from the service's settings; the connect sheet links to the page and lists the steps |
+| Dropbox, Spotify | one each | Their sign-in page |
+| — | Weather (Open-Meteo) | None |
+
+**MCP plugins.** Where a service runs an official remote MCP server that lets apps register themselves (OAuth dynamic client registration) and accepts a `clanker://` redirect, the plugin uses it: [src/lib/plugins/mcp.ts](src/lib/plugins/mcp.ts) is a Streamable HTTP client (MCP 2025-06-18) that finds the server's authorization server (RFC 9728), registers (RFC 7591), signs in with PKCE naming the server as the resource (RFC 8707), refreshes tokens, and lists the server's tools. [src/lib/tools/mcp.ts](src/lib/tools/mcp.ts) offers them to the model as `<prefix>_<tool>`, with schemas narrowed to what every model provider accepts; results become text, images and workspace files (`mcp/`). Tools the server marks read-only stay on when a plugin's **Allow changes** is off. Tool lists are rechecked when Plugins opens (at most every six hours) or from a plugin's settings. Services whose MCP servers don't allow that (Google's Workspace MCP servers need your own OAuth client; GitHub, Asana, Slack and Box need pre-registered apps; Airtable, Dropbox and Monday accept only web or loopback redirects; Figma accepts only partner apps; Canva registers app redirects but its sign-in only accepts loopback ones) keep direct API integrations.
+
+Sign-in pages open in the system browser (Chrome Custom Tabs on Android, `ASWebAuthenticationSession` on iOS, via `expo-web-browser`) and redirect back into the app with an authorization code (OAuth with PKCE, public clients, no secrets). [`src/app/+native-intent.tsx`](src/app/+native-intent.tsx) keeps those redirects from being treated as page links. GitHub's device code page and the token pages of token-based services open in the browser too. Tokens are kept in the keychain, refresh on their own, and disconnecting revokes them where the provider allows. The catalog (tools, scopes, prompts, system-prompt guidance) is [src/lib/plugins/catalog.ts](src/lib/plugins/catalog.ts); providers and their sign-in are [providers.ts](src/lib/plugins/providers.ts) and [auth.ts](src/lib/plugins/auth.ts); hand-written tools live in `src/lib/tools/{google,googleMore,microsoft,developer,productivity,media}.ts`. Only installed plugins' tools are offered; read-only plugins leave out the tools that change things; mail tools draft unless told to send; deletes go to the trash or recycle bin where the service has one. Plugins need **Files & code** on and work only with the built-in agent, not remote backends.
+
+**OAuth clients.** MCP plugins need none. Google, Microsoft, Dropbox, Spotify and GitHub's device flow need an app registered with the provider. Build them in through `.env.local`, or let the first **+** for that provider walk through a one-time setup (steps, the exact redirect URI to register, and a field for the client ID). Google is the exception: it redirects to a scheme made from the client ID, which [app.config.js](app.config.js) registers from `EXPO_PUBLIC_GOOGLE_PLUGIN_CLIENT_ID`, so a Google client takes effect only in a build made with it.
+
+| Variable | Register | Redirect URI |
+| --- | --- | --- |
+| `EXPO_PUBLIC_GOOGLE_PLUGIN_CLIENT_ID` | Google Cloud OAuth client of type **iOS** (works on Android too) with bundle ID `com.danie4588e.Clanker`; enable the Gmail, Calendar, Drive, Docs, Sheets, Slides and Tasks APIs; add test users until the app is verified | `com.googleusercontent.apps.<client id>:/oauth2redirect` (implicit for iOS clients) |
+| `EXPO_PUBLIC_MICROSOFT_CLIENT_ID` | Entra app for any org + personal accounts, "Mobile and desktop applications" platform | `clanker://oauth/microsoft` |
+| `EXPO_PUBLIC_DROPBOX_CLIENT_ID` | Dropbox scoped app (Full Dropbox) with the scopes in providers.ts | `clanker://oauth/dropbox` |
+| `EXPO_PUBLIC_SPOTIFY_CLIENT_ID` | Spotify app (Web API) | `clanker://oauth/spotify` |
+| `EXPO_PUBLIC_GITHUB_CLIENT_ID` | GitHub OAuth app with Device Flow enabled (optional; tokens work without it) | — |
+
+The regular and preview builds share the `clanker` scheme, so with both installed Android may ask which one should finish a sign-in.
+
+`npm run test:plugins` checks the Docs edit logic, that every catalog tool is implemented and labelled, the sign-in flows (redirects, PKCE, device code), and the MCP client against a fake server (registration, sign-in, sessions, token refresh, event streams, schemas, results).
+
 ## Run
 
 ```sh

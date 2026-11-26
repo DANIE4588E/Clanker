@@ -7,6 +7,7 @@ import { importAsset } from '../attachments';
 import { compress, contextStatus, decompress, searchContext } from '../context';
 import { describeJob, getJob, jobsOf, killJob, startJob, waitForJob } from '../jobs';
 import { memoryInPool, memoryOn, readChat, searchChats } from '../memory';
+import { pluginToolOn } from '../plugins/catalog';
 import { memoryPool, workspaceFor } from '../projects';
 import {
   buildSkillMd,
@@ -33,6 +34,8 @@ import { askUser } from './ask';
 import type { ToolEntry } from './catalog';
 import { describeCall, lineChanges } from './describe';
 import { extractZipDocument, ZIP_DOCUMENT_EXT } from './documents';
+import { isMcpTool, mcpTools } from './mcp';
+import { PLUGIN_TOOLS } from './plugins';
 import { forgetObserved, isObserved, markObserved, requireObserved } from './observe';
 import { PHONE_TOOLS, phoneAvailable, phoneSupported } from './phone';
 import { download, htmlToMarkdown, renderPage, SEARCH_PROVIDERS, searchWeb } from './web';
@@ -1161,6 +1164,7 @@ const TOOLS: Tool[] = [
   ...MEMORY_TOOLS,
   ...SKILL_TOOLS,
   ...PHONE_TOOLS,
+  ...PLUGIN_TOOLS,
 ];
 
 export const shellAvailable = () => Platform.OS === 'android' && !!ClankerShell;
@@ -1176,6 +1180,8 @@ function enabled(tool: Tool, conversationId?: string | null) {
   if (useSettings.getState().disabledTools.includes(tool.name)) return false;
   if (tool === runShell) return shellAvailable();
   if (PHONE_TOOLS.includes(tool)) return phoneAvailable();
+  // Connected, granted and turned on under Plugins.
+  if (PLUGIN_TOOLS.includes(tool) || isMcpTool(tool.name)) return pluginToolOn(tool.name);
   if (tool === webSearch || tool === webFetch) return webEnabled();
   if (MEMORY_TOOLS.includes(tool)) return conversationId !== undefined && memoryOn(conversationId);
   // Loading needs skills to load, unless the model may make them; making them needs the setting.
@@ -1184,12 +1190,15 @@ function enabled(tool: Tool, conversationId?: string | null) {
   return true;
 }
 
+/** The built-in tools and those of connected MCP servers, which change as servers are added. */
+const allTools = (): Tool[] => [...TOOLS, ...mcpTools()];
+
 /**
  * Whether the model is offered the named tool. The memory tools also depend on the chat, so they
  * count as on only when given its id.
  */
 export const toolOn = (name: string, conversationId?: string | null) =>
-  TOOLS.some((t) => t.name === name && enabled(t, conversationId));
+  allTools().some((t) => t.name === name && enabled(t, conversationId));
 
 // Without the job tools a background job's result could never be collected, so the run tools
 // lose their background option.
@@ -1203,7 +1212,7 @@ function withoutBackground(parameters: Tool['parameters']) {
 /** Tools offered to the model on this device, in the given chat (null: the chat about to be started). */
 export function availableTools(conversationId: string | null): ToolSpec[] {
   const jobs = jobsOn();
-  return TOOLS.filter((t) => enabled(t, conversationId)).map(({ name, description, parameters }) => ({
+  return allTools().filter((t) => enabled(t, conversationId)).map(({ name, description, parameters }) => ({
     name,
     description,
     parameters: jobs || !BACKGROUND_TOOLS.includes(name) ? parameters : withoutBackground(parameters),
@@ -1211,7 +1220,7 @@ export function availableTools(conversationId: string | null): ToolSpec[] {
 }
 
 export async function executeTool(call: ToolCall, ctx: Omit<ToolContext, 'callId' | 'workspace'>): Promise<ToolOutcome> {
-  const tool = TOOLS.find((t) => t.name === call.name);
+  const tool = allTools().find((t) => t.name === call.name);
   if (!tool || !enabled(tool, ctx.conversationId)) {
     return { output: `Unknown tool "${call.name}".`, isError: true };
   }

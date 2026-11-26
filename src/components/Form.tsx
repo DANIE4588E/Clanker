@@ -99,6 +99,8 @@ type RowProps = {
   icon?: IconName;
   /** A brand mark in place of the feather icon, when friendly model names are on. */
   brand?: BrandId;
+  /** Any mark in place of the icon, drawn at icon size by the caller. */
+  leading?: ReactNode;
   title: string;
   /** Second line under the title. */
   detail?: string;
@@ -123,6 +125,7 @@ type RowProps = {
 export function Row({
   icon,
   brand,
+  leading,
   title,
   detail,
   value,
@@ -158,7 +161,7 @@ export function Row({
             { opacity: disabled ? 0.4 : 1, transitionProperty: 'opacity', transitionDuration: 200 },
           ]}
         >
-          {brand ? <BrandIcon brand={brand} size={ICON} /> : icon ? <Feather name={icon} size={ICON} color={tintColor ?? colors.textSecondary} /> : null}
+          {leading ?? (brand ? <BrandIcon brand={brand} size={ICON} /> : icon ? <Feather name={icon} size={ICON} color={tintColor ?? colors.textSecondary} /> : null)}
           <View style={styles.rowText}>
             <Text numberOfLines={1} style={[styles.rowTitle, { color: tintColor ?? (muted ? colors.textTertiary : colors.text) }]}>
               {title}

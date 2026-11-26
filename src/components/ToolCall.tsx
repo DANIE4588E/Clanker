@@ -12,6 +12,7 @@ import type { Workspace } from '@/lib/workspace';
 import { useWorkspace } from '@/lib/useWorkspace';
 import { CodeBlock } from './CodeBlock';
 import { NestedScroll } from './NestedScroll';
+import { pluginOfTool, pluginTools } from '@/lib/plugins/catalog';
 import { areasSelect, SelectionArea, useSelectable } from './SelectionArea';
 
 const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
@@ -36,7 +37,13 @@ const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   context_status: 'bar-chart-2',
 };
 
-export const toolIcon = (name: string): keyof typeof Feather.glyphMap => ICONS[name] ?? 'tool';
+export const toolIcon = (name: string): keyof typeof Feather.glyphMap =>
+  ICONS[name] ?? toolOf(name)?.icon ?? (pluginOfTool(name) ? 'grid' : 'tool');
+
+const toolOf = (name: string) => {
+  const plugin = pluginOfTool(name);
+  return plugin ? pluginTools(plugin).find((t) => t.name === name) : undefined;
+};
 
 const JOB_LABELS = {
   running: 'in background',

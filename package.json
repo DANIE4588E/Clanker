@@ -27,6 +27,7 @@
     "expo-splash-screen": "~58.0.12",
     "expo-status-bar": "~58.0.4",
     "expo-system-ui": "~58.0.6",
+    "expo-web-browser": "~58.1.0",
     "fflate": "^0.8.3",
     "llama.rn": "0.12.9",
     "lowlight": "^3.3.0",
@@ -59,6 +60,7 @@
     "lint": "expo lint",
     "test:remote": "node --test scripts/test-remote-*.mjs",
     "test:subscriptions": "node --test scripts/test-subscriptions.mjs",
+    "test:plugins": "node --test scripts/test-google-plugin.mjs scripts/test-plugin-catalog.mjs scripts/test-plugin-auth.mjs scripts/test-plugin-mcp.mjs",
     "build:apk": "node scripts/build-apk.mjs"
   },
   "private": true,

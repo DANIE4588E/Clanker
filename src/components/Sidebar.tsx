@@ -86,7 +86,7 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
     else open(id);
   };
 
-  const goTo = (href: '/projects' | '/library' | '/skills' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
+  const goTo = (href: '/projects' | '/library' | '/skills' | '/plugins' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
     navigation.closeDrawer();
     router.push(href);
   };
@@ -136,6 +136,13 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
       >
         <Feather name="book-open" size={18} color={colors.text} />
         <Text style={[styles.itemText, { color: colors.text, fontWeight: '500' }]}>Skills</Text>
+      </Pressable>
+      <Pressable
+        onPress={() => goTo('/plugins')}
+        style={({ pressed }) => [styles.item, styles.row, pressed && { backgroundColor: colors.surfaceHover }]}
+      >
+        <Feather name="grid" size={18} color={colors.text} />
+        <Text style={[styles.itemText, { color: colors.text, fontWeight: '500' }]}>Plugins</Text>
       </Pressable>
       <Pressable
         onPress={() => goTo('/usage')}

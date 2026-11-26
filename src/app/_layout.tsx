@@ -106,6 +106,14 @@ export default function RootLayout() {
               <Stack.Screen name="skills/skill" options={{ title: '' }} />
               <Stack.Screen name="skills/edit" options={{ title: '' }} />
               <Stack.Screen name="skills/install" options={{ presentation: 'modal', title: 'Install skills' }} />
+              <Stack.Screen name="plugins/index" options={{ headerShown: false }} />
+              <Stack.Screen name="plugins/list" options={{ headerShown: false }} />
+              <Stack.Screen name="plugins/plugin" options={{ headerShown: false }} />
+              <Stack.Screen name="plugins/settings" options={{ headerShown: false }} />
+              <Stack.Screen name="plugins/connect" options={{ headerShown: false, presentation: 'modal' }} />
+              {/* Sign-in redirects that slip past +native-intent close themselves at once, unseen. */}
+              <Stack.Screen name="oauth/[provider]" options={{ headerShown: false, presentation: 'transparentModal', animation: 'none' }} />
+              <Stack.Screen name="oauth2redirect" options={{ headerShown: false, presentation: 'transparentModal', animation: 'none' }} />
             </Stack>
             <OverlayHost />
             <DialogHost />
