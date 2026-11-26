@@ -76,6 +76,8 @@ type Props = {
   onCancelEdit?: () => void;
   /** Takes the box off the screen (finding in the chat, a dialog asking for text) and keeps what it holds. */
   hidden?: boolean;
+  /** A new value focuses the box (a chat just started by pulling up the last one). */
+  focusKey?: number;
 };
 
 /**
@@ -100,6 +102,7 @@ export function ComposerDock({
   editing = false,
   onCancelEdit,
   hidden = false,
+  focusKey = 0,
 }: Props) {
   const { colors } = useTheme();
   const [ownAttachments, setOwnAttachments] = useState<AttachmentPart[]>([]);
@@ -185,6 +188,10 @@ export function ComposerDock({
     if (quoteCount > lastQuoteCount.current) input.current?.focus();
     lastQuoteCount.current = quoteCount;
   }, [quoteCount]);
+
+  useEffect(() => {
+    if (focusKey) input.current?.focus();
+  }, [focusKey]);
 
   // Starting an edit opens the box on the message.
   useEffect(() => {

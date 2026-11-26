@@ -35,12 +35,16 @@ import Animated, {
   type LayoutAnimationFunction,
   type SharedValue,
 } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { scheduleOnRN } from 'react-native-worklets';
+import * as Haptics from '@/lib/haptics';
 import { setStorageWriteDeferred } from '@/lib/storage';
 import { useTheme } from '@/lib/theme';
 import { useChats, type Message } from '@/store/chats';
 import { FindContext, type FindTarget } from './FindHighlight';
 import { MessageBubble } from './MessageBubble';
 import { ChatScrollContext, useJsScrollRelay, type ChatScrollHandle } from './NestedScroll';
+import { PULL_MAX, PULL_RESISTANCE, PULL_THRESHOLD, PullNewChat } from './PullNewChat';
 
 const NO_MESSAGES: Message[] = [];
 const LIST_PADDING_TOP = 12;
@@ -118,6 +122,8 @@ type Props = {
   bottomInset: SharedValue<number>;
   /** Find in chat: the text to mark in every message, and the message to bring into view. */
   find?: { needle: string; focusId: string | null } | null;
+  /** Given while nothing runs: pulling the chat up past its end and letting go starts a new chat. */
+  onPullNewChat?: () => void;
 };
 
 export const MessageList = memo(function MessageList({
@@ -129,6 +135,7 @@ export const MessageList = memo(function MessageList({
   topInset,
   bottomInset,
   find,
+  onPullNewChat,
 }: Props) {
   const focusId = find?.focusId ?? null;
   const needle = find?.needle ?? '';
@@ -148,6 +155,8 @@ export const MessageList = memo(function MessageList({
   const isStreaming = data[0]?.role === 'assistant' && data[0]?.status === 'streaming';
   const reduceMotion = useReducedMotion();
   const pinnedSV = useSharedValue(true);
+  // At the newest end of the list (offset 0, inverted), where pulling further up starts a new chat.
+  const atEndSV = useSharedValue(true);
   const draggingSV = useSharedValue(false);
   const streamingSV = useSharedValue(isStreaming);
   const reduceMotionSV = useSharedValue(reduceMotion);
@@ -262,6 +271,7 @@ export const MessageList = memo(function MessageList({
         }
       }
       const y = contentOffset.y;
+      atEndSV.set(y <= 1);
       const prevY = lastOffsetRef.current;
       lastOffsetRef.current = y;
       // Only the user (a drag, its fling, or a nested scroll relaying into the list) may unpin.
@@ -285,7 +295,7 @@ export const MessageList = memo(function MessageList({
           : { id: conversationId, pinned: nextPinned, showJump: nextJump },
       );
     },
-    [conversationId, outerContentH, outerDriving, outerLayoutH, outerOffsetY, pinnedSV],
+    [conversationId, outerContentH, outerDriving, outerLayoutH, outerOffsetY, pinnedSV, atEndSV],
   );
 
   const onScrollBeginDrag = useCallback(
@@ -391,6 +401,71 @@ export const MessageList = memo(function MessageList({
     [scrollToFocus],
   );
 
+  // Pull up for a new chat. The pan runs alongside the list's own scrolling and only counts once the
+  // list is at its end and the finger keeps going up, which the list itself can't follow (its
+  // bounce and overscroll are off meanwhile). The list then rises with resistance over a ring that
+  // fills; let go past the threshold and the chat fades out into a new one.
+  const pullEnabled = !!onPullNewChat;
+  const pull = useSharedValue(0);
+  const pullFrom = useSharedValue(-1);
+  const armed = useSharedValue(false);
+  const leaving = useSharedValue(0);
+  const onArmed = useCallback(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium), []);
+  const finishPull = useCallback(() => onPullNewChat?.(), [onPullNewChat]);
+  const startNewChat = useCallback(() => {
+    leaving.set(
+      withTiming(1, { duration: 160, easing: Easing.out(Easing.quad) }, (finished) => {
+        'worklet';
+        if (finished) scheduleOnRN(finishPull);
+      }),
+    );
+  }, [leaving, finishPull]);
+  // Shown again if the chat stays (another one opening unmounts the list instead).
+  useEffect(() => {
+    leaving.set(0);
+  }, [conversationId, leaving]);
+  const listGesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .enabled(pullEnabled)
+      // Only a drag up starts it, so sideways swipes (the drawer, code scrolling) never meet it.
+      .activeOffsetY(-8)
+      .failOffsetX([-20, 20])
+      .onStart(() => {
+        pullFrom.set(-1);
+      })
+      .onUpdate((e) => {
+        if (!atEndSV.get()) {
+          pullFrom.set(-1);
+          pull.set(0);
+          return;
+        }
+        // Measured from where the finger was when the list reached its end.
+        if (pullFrom.get() < 0) pullFrom.set(e.absoluteY);
+        const raw = pullFrom.get() - e.absoluteY;
+        if (raw < 0) pullFrom.set(e.absoluteY);
+        const distance = Math.min(Math.max(raw, 0) * PULL_RESISTANCE, PULL_MAX);
+        pull.set(distance);
+        const ready = distance >= PULL_THRESHOLD;
+        if (ready !== armed.get()) {
+          armed.set(ready);
+          if (ready) scheduleOnRN(onArmed);
+        }
+      })
+      .onFinalize(() => {
+        if (armed.get()) {
+          armed.set(false);
+          scheduleOnRN(startNewChat);
+        }
+        pullFrom.set(-1);
+        pull.set(withTiming(0, { duration: 220, easing: Easing.out(Easing.cubic) }));
+      });
+    return Gesture.Simultaneous(Gesture.Native(), pan);
+  }, [pullEnabled, atEndSV, pull, pullFrom, armed, onArmed, startNewChat]);
+  const pullStyle = useAnimatedStyle(() => ({
+    opacity: 1 - leaving.get(),
+    transform: [{ translateY: -pull.get() }],
+  }));
+
   const spacerStyle = useAnimatedStyle(() => ({ height: bottomInset.value }));
   const jumpStyle = useAnimatedStyle(() => ({ transform: [{ translateY: -bottomInset.value }] }));
   const listHeader = useMemo(() => <Animated.View style={spacerStyle} />, [spacerStyle]);
@@ -420,6 +495,8 @@ export const MessageList = memo(function MessageList({
     <ChatScrollContext.Provider value={chatScroll}>
       <CellLayoutContext.Provider value={cellLayout}>
         <View style={styles.container}>
+          <Animated.View style={[styles.container, pullStyle]}>
+          <GestureDetector gesture={listGesture}>
           <FlatList
             ref={listRef}
             inverted
@@ -448,10 +525,16 @@ export const MessageList = memo(function MessageList({
             onScrollBeginDrag={onScrollBeginDrag}
             onScrollEndDrag={onScrollEndDrag}
             onMomentumScrollEnd={onMomentumScrollEnd}
+            // Pulling past the end is the new-chat gesture's, so the list doesn't bounce or stretch there.
+            bounces={!pullEnabled}
+            overScrollMode={pullEnabled ? 'never' : 'auto'}
             onContentSizeChange={useJsScrollRelay ? onContentSizeChange : undefined}
             onLayout={useJsScrollRelay ? onLayout : undefined}
             scrollEventThrottle={16}
           />
+          </GestureDetector>
+          </Animated.View>
+          {pullEnabled && <PullNewChat pull={pull} armed={armed} bottom={bottomInset} />}
           {showJump && (
             <Animated.View style={[styles.jumpSlot, jumpStyle]}>
               <Pressable

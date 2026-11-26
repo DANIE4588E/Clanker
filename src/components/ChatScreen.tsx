@@ -107,6 +107,8 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   useFocusEffect(useCallback(() => addAskListener(addQuote), [addQuote]));
   const [pickerOpen, setPickerOpen] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<MenuAnchor | null>(null);
+  // Bumped to put the cursor in the box, with the keyboard up, for a chat started by pulling.
+  const [composerFocus, setComposerFocus] = useState(0);
   // Find in chat: the bar takes the header's place, for the chat it was opened in (another chat,
   // or a new one, closes it); `find` is what it marks in the messages and the one it shows.
   const [findIn, setFindIn] = useState<string | null>(null);
@@ -267,6 +269,12 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     else open(null);
   }, [currentId, open]);
 
+  // Pulling the finished chat up past its end starts a new one, ready to type in, as in ChatGPT.
+  const pullNewChat = useCallback(() => {
+    newChat();
+    setComposerFocus((n) => n + 1);
+  }, [newChat]);
+
   // The chat's menu, built when it opens so it shows the chat as it is then (pinned, archived).
   const menuChat = menuAnchor && currentId ? useChats.getState().conversations[currentId] : undefined;
   const menuItems = menuChat
@@ -302,6 +310,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
               topInset={topInset}
               bottomInset={bottomInset}
               find={finding ? find : null}
+              onPullNewChat={streaming || finding ? undefined : pullNewChat}
             />
           ) : (
             <Animated.View style={[styles.container, { paddingTop: topInset }, emptyInsetStyle]}>
@@ -339,6 +348,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             // A text dialog (naming a new project, say) raises the keyboard, which would lift the
             // box above the dialog's backdrop.
             hidden={finding || promptOpen}
+            focusKey={composerFocus}
           />
         </View>
       </KeyboardAvoidingView>
