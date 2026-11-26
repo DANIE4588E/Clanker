@@ -12,13 +12,14 @@ import { EdgeFade } from '@/components/EdgeFade';
 import { EmptyState } from '@/components/EmptyState';
 import { MessageList } from '@/components/MessageList';
 import { ModelPicker } from '@/components/ModelPicker';
-import { continueReply, regenerate, stopStreaming, submitMessage } from '@/lib/chat';
+import { attachmentsForEdit, branchToNewChat, continueReply, editMessage, regenerate, stopStreaming, submitMessage } from '@/lib/chat';
+import { deleteAttachment } from '@/lib/attachments';
 import { brandOfBackendKind, brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import type { AttachmentPart } from '@/lib/providers';
-import { withQuotes } from '@/lib/quotes';
+import { splitQuotes, withQuotes } from '@/lib/quotes';
 import { useTheme } from '@/lib/theme';
 import { useContextUsage } from '@/lib/usage';
-import { useChats } from '@/store/chats';
+import { messageText, useChats } from '@/store/chats';
 import { useProjects } from '@/store/projects';
 import { useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
@@ -88,6 +89,14 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   const [draft, setDraft] = useState('');
   // Text picked from the chat with "Ask Clanker", sent as quotes ahead of the next message.
   const [quotes, setQuotes] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
+  // A message being edited in the box. What the box held before waits in `stash`, put back when
+  // the edit is sent or cancelled.
+  const [editing, setEditing] = useState<{
+    chatId: string;
+    messageId: string;
+    stash: { draft: string; quotes: string[]; attachments: AttachmentPart[] };
+  } | null>(null);
   const addQuote = useCallback((text: string) => setQuotes((prev) => (prev.includes(text) ? prev : [...prev, text])), []);
   // Only the screen in front takes them, with a project chat open over the main one.
   useFocusEffect(useCallback(() => addAskListener(addQuote), [addQuote]));
@@ -128,11 +137,43 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     }
   }, [currentId]);
 
+  const endEdit = useCallback(
+    (sent: boolean) => {
+      if (!editing) return;
+      // The edit's attachments are copies of the message's (see attachmentsForEdit); unsent, they go.
+      if (!sent) for (const a of attachments) if (a.file) deleteAttachment(a.file);
+      setDraft(editing.stash.draft);
+      setQuotes(editing.stash.quotes);
+      setAttachments(editing.stash.attachments);
+      setEditing(null);
+    },
+    [attachments, editing]
+  );
+
+  // Leaving the chat drops an edit of one of its messages.
+  useEffect(() => {
+    if (!editing) return;
+    return useUI.subscribe((s) => {
+      if (s.currentId !== editing.chatId) endEdit(false);
+    });
+  }, [editing, endEdit]);
+
   const send = useCallback(
-    (text: string, attachments: AttachmentPart[]) => {
+    (text: string, sent: AttachmentPart[]) => {
+      if (editing && editing.chatId === currentId) {
+        try {
+          editMessage(editing.chatId, editing.messageId, withQuotes(quotes, text), sent);
+          endEdit(true);
+        } catch (e) {
+          Alert.alert('Could not edit the message', e instanceof Error ? e.message : String(e));
+          // The box was emptied on send; the edit goes back in it.
+          setAttachments(sent);
+        }
+        return;
+      }
       try {
         // While a reply runs, this queues the message or steers the reply with it.
-        const id = submitMessage(currentId, withQuotes(quotes, text), attachments);
+        const id = submitMessage(currentId, withQuotes(quotes, text), sent);
         if (id !== currentId) open(id);
         setDraft('');
         setQuotes([]);
@@ -140,7 +181,49 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
         reportSendError(e);
       }
     },
-    [currentId, open, quotes]
+    [currentId, editing, endEdit, open, quotes]
+  );
+
+  const onEdit = useCallback(
+    (messageId: string) => {
+      if (!currentId || streaming) return;
+      const message = useChats.getState().conversations[currentId]?.messages.find((m) => m.id === messageId);
+      if (!message) return;
+      // Switching to another message's edit keeps what the box held before the first one.
+      if (editing) for (const a of attachments) if (a.file) deleteAttachment(a.file);
+      const stash = editing?.stash ?? { draft, quotes, attachments };
+      const parts = splitQuotes(messageText(message));
+      setEditing({ chatId: currentId, messageId, stash });
+      setDraft(parts.text);
+      setQuotes(parts.quotes);
+      setAttachments(attachmentsForEdit(currentId, messageId));
+    },
+    [attachments, currentId, draft, editing, quotes, streaming]
+  );
+
+  const onBranch = useCallback(
+    (messageId: string) => {
+      if (!currentId || streaming) return;
+      const messages = useChats.getState().conversations[currentId]?.messages ?? [];
+      const next = messages[messages.findIndex((m) => m.id === messageId) + 1];
+      // What the box held is replaced, an edit's put-aside draft included; unsent, its files go.
+      const dropped = [...attachments, ...(editing?.stash.attachments ?? [])];
+      try {
+        open(branchToNewChat(currentId, messageId));
+      } catch (e) {
+        Alert.alert('Could not branch the chat', e instanceof Error ? e.message : String(e));
+        return;
+      }
+      // The prompt that followed the reply waits in the box of the new chat, to be changed and sent.
+      // Set after `open`, so it wins over an edit being put away on leaving the chat.
+      if (next?.role !== 'user') return;
+      for (const a of dropped) if (a.file) deleteAttachment(a.file);
+      const parts = splitQuotes(messageText(next));
+      setDraft(parts.text);
+      setQuotes(parts.quotes);
+      setAttachments(attachmentsForEdit(currentId, next.id));
+    },
+    [attachments, currentId, editing, open, streaming]
   );
 
   const onRegenerate = useCallback(
@@ -178,6 +261,9 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             <MessageList
               conversationId={currentId}
               onRegenerate={remote ? undefined : onRegenerate}
+              onEdit={remote ? undefined : onEdit}
+              onBranch={remote ? undefined : onBranch}
+              busy={streaming}
               topInset={topInset}
               bottomInset={bottomInset}
             />
@@ -210,6 +296,10 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             usage={usage}
             progress={composerProgress}
             onBaseHeight={setComposerBase}
+            attachments={attachments}
+            onChangeAttachments={setAttachments}
+            editing={!!editing && editing.chatId === currentId}
+            onCancelEdit={() => endEdit(false)}
           />
         </View>
       </KeyboardAvoidingView>

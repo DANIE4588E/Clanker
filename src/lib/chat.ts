@@ -1,15 +1,15 @@
-import { interruptContent, messageText, useChats, type QueuedMessage } from '@/store/chats';
+import { interruptContent, messageText, useChats, type CompressionBlock, type Conversation, type Message, type QueuedMessage } from '@/store/chats';
 import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/store/settings';
 import { localToolsOn } from '@/store/localModels';
 import { useUI } from '@/store/ui';
-import { deleteAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
+import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
 import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
 import { askToNotify, notifyReplyFinished } from './notifications';
-import { workspaceFor } from './projects';
+import { workspaceFor, workspaceOf } from './projects';
 import { parsePartialJson } from './partialJson';
 import { firstLine } from './quotes';
-import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
+import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type ContentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
 import { apiKeys, flushJsonStorage, uid } from './storage';
@@ -19,6 +19,7 @@ import { endPhoneRun, onPhoneStop } from './tools/phone';
 import { markObserved } from './tools/observe';
 import { isRemoteChat, remoteEffortForChat, sendRemoteMessage, sendRemoteQueue, stopRemoteChat } from './remote/chat';
 import { systemPrompt, writeContextNote } from './tools/prompt';
+import { chatWorkspace } from './workspace';
 
 const controllers = new Map<string, AbortController>();
 
@@ -45,14 +46,16 @@ function fallbackTitle(text: string) {
   return line ? (line.length > 40 ? line.slice(0, 40).trimEnd() + '…' : line) : 'Image';
 }
 
-/** Adds the user's message to the conversation. */
-function postUserMessage(id: string, text: string, attachments: AttachmentPart[]) {
+/** Adds the user's message to the conversation, or with `replacing`, a new version of that message. */
+function postUserMessage(id: string, text: string, attachments: AttachmentPart[], replacing?: string) {
   const { tools } = useSettings.getState();
-  // With tools on, attachments are also copied into the workspace so the agent can work on them.
+  // With tools on, attachments are also copied into the workspace so the agent can work on them,
+  // unless they're there already (an edited message keeping its files).
   const ws = workspaceFor(id);
   const parts = tools
     ? attachments.map((a) => {
         try {
+          if (a.path && ws.fileAt(a.path).exists) return a;
           return { ...a, path: saveToWorkspace(ws, a) };
         } catch {
           return a;
@@ -65,11 +68,13 @@ function postUserMessage(id: string, text: string, attachments: AttachmentPart[]
     parts.flatMap((p) => (p.type === 'file' && p.path && p.text != null && !p.file ? [p.path] : []))
   );
 
-  useChats.getState().addMessage(id, {
-    role: 'user',
+  const message = {
+    role: 'user' as const,
     content: [...parts, ...(text ? [{ type: 'text' as const, text }] : [])],
-    status: 'done',
-  });
+    status: 'done' as const,
+  };
+  if (replacing) useChats.getState().branch(id, replacing, message);
+  else useChats.getState().addMessage(id, message);
 }
 
 /** Starts a new conversation (when `conversationId` is null) or continues one, and streams the reply. */
@@ -94,14 +99,129 @@ export function sendMessage(conversationId: string | null, text: string, attachm
   return id;
 }
 
-/** Drops `messageId` (an assistant reply) and everything after it, then asks the model again. */
+/**
+ * Asks the model again for the reply `messageId`, as a new version of the chat from there on; the
+ * reply and what followed it stay behind as the version before. A failed reply is replaced instead.
+ */
 export function regenerate(conversationId: string, messageId: string) {
-  if (isRemoteChat(conversationId)) return;
+  if (isRemoteChat(conversationId) || controllers.has(conversationId)) return;
   const { active } = useSettings.getState();
   const chats = useChats.getState();
+  const message = chats.conversations[conversationId]?.messages.find((m) => m.id === messageId);
+  if (!message || message.role !== 'assistant') return;
   if (active) chats.setModel(conversationId, active.endpointId, active.model);
-  chats.truncateFrom(conversationId, messageId);
+  void runCompletion(conversationId, { branchFrom: { messageId, replace: message.status === 'error' } });
+}
+
+/**
+ * Sends an edited version of the user's message `messageId` and gets a new reply to it. The
+ * message as it was and everything after it stay behind as the version before.
+ */
+export function editMessage(conversationId: string, messageId: string, text: string, attachments: AttachmentPart[]) {
+  if (isRemoteChat(conversationId)) throw new Error('Messages in remote chats can\u2019t be edited.');
+  if (controllers.has(conversationId)) throw new Error('Wait for the reply to finish first.');
+  const { active } = useSettings.getState();
+  if (!active) throw new Error('Add an endpoint in Settings to start chatting.');
+  const chats = useChats.getState();
+  const message = chats.conversations[conversationId]?.messages.find((m) => m.id === messageId);
+  if (!message || message.role !== 'user') throw new Error('That message is no longer in the chat.');
+  chats.setModel(conversationId, active.endpointId, active.model);
+  postUserMessage(conversationId, text, attachments, messageId);
   void runCompletion(conversationId);
+}
+
+/**
+ * The attachments of the user's message `messageId`, as copies for an edit of it: removing one
+ * from the box, or sending, leaves the message as it was untouched.
+ */
+export function attachmentsForEdit(conversationId: string, messageId: string): AttachmentPart[] {
+  const message = useChats.getState().conversations[conversationId]?.messages.find((m) => m.id === messageId);
+  return (message?.content ?? []).flatMap((p): AttachmentPart[] =>
+    p.type === 'image' || p.type === 'file' ? [p.file ? { ...p, file: duplicateAttachment(p.file) } : p] : []
+  );
+}
+
+/** A branched chat's title: the one it came from, marked as a branch. */
+function branchedTitle(title: string) {
+  return title.endsWith(BRANCHED) ? title : `${title}${BRANCHED}`;
+}
+const BRANCHED = ' (branched)';
+
+/** A message's content with files of its own, for a copy of the chat. */
+function copyContent(content: ContentPart[]): ContentPart[] {
+  return content.map((p): ContentPart => {
+    if ((p.type === 'image' || p.type === 'file') && p.file) return { ...p, file: duplicateAttachment(p.file) };
+    if (p.type !== 'tool') return p;
+    return {
+      ...p,
+      ...(p.images ? { images: p.images.map((img) => ({ ...img, file: duplicateAttachment(img.file) })) } : {}),
+      // A job still running belongs to the chat it was started in.
+      ...(p.background?.status === 'running' ? { background: { ...p.background, status: 'lost' as const } } : {}),
+    };
+  });
+}
+
+/**
+ * Starts a new chat with the conversation up to and including `messageId`, as it shows now. It
+ * keeps the model, project, memory and compressed context, and takes a copy of the chat's own
+ * workspace. Returns the new chat's id.
+ */
+export function branchToNewChat(conversationId: string, messageId: string) {
+  const chats = useChats.getState();
+  const c = chats.conversations[conversationId];
+  if (!c || isRemoteChat(conversationId)) throw new Error('Remote chats can\u2019t be branched.');
+  const index = c.messages.findIndex((m) => m.id === messageId);
+  if (index < 0) throw new Error('That message is no longer in the chat.');
+  const id = uid();
+  const now = Date.now();
+
+  // Message ids stay as they were: compressions and context notes refer to them.
+  const messages = c.messages.slice(0, index + 1).map(({ fork: _, ...m }): Message => ({ ...m, content: copyContent(m.content) }));
+  const kept = new Set(unitsOf(messages).map((u) => u.key));
+  // Blocks cut through by the branch point give way to the ones they had swallowed, where those fit.
+  const keep = (b: CompressionBlock): CompressionBlock[] =>
+    kept.has(b.start) && kept.has(b.end) ? [b] : (b.children ?? []).flatMap(keep);
+  const compressions = (c.compressions ?? []).flatMap(keep);
+  const ids = new Set(messages.map((m) => m.id));
+  const notes = Object.fromEntries(Object.entries(c.notes ?? {}).filter(([key]) => ids.has(key.split(':')[0])));
+
+  // A chat with a workspace of its own gets a copy; project and shared ones go on sharing theirs.
+  const from = workspaceOf(c);
+  const own = from.key === `chat:${c.id}`;
+  if (own) {
+    const to = chatWorkspace(id);
+    try {
+      for (const entry of from.walk()) {
+        to.ensureParent(entry.path);
+        from.fileAt(entry.path).copySync(to.fileAt(entry.path));
+      }
+    } catch {
+      // What copied stays; the model sees the workspace as it is.
+    }
+  }
+
+  const branch: Conversation = {
+    id,
+    title: branchedTitle(c.title),
+    titled: c.titled,
+    branchedFrom: c.id,
+    createdAt: now,
+    updatedAt: now,
+    backendId: 'local',
+    endpointId: c.endpointId,
+    model: c.model,
+    messages,
+    ...(compressions.length ? { compressions } : {}),
+    ...(Object.keys(notes).length ? { notes } : {}),
+    // Copies get new modification times, so the model reads files again before changing them.
+    ...(!own && c.observed ? { observed: c.observed } : {}),
+    ...(c.memory === false ? { memory: false as const } : {}),
+    ...(c.memoryBase ? { memoryBase: c.memoryBase } : {}),
+    ...(c.projectId ? { projectId: c.projectId } : {}),
+    ...(c.workspace ? { workspace: c.workspace } : {}),
+  };
+  chats.insert(branch);
+  return id;
 }
 
 /** Resumes an interrupted or failed assistant reply in place without adding a user message. */
@@ -189,7 +309,7 @@ export function deleteQueued(conversationId: string, queuedId: string) {
   for (const a of message?.attachments ?? []) if (a.file) deleteAttachment(a.file);
 }
 
-async function runCompletion(id: string, opts?: { resumeMessageId?: string }) {
+async function runCompletion(id: string, opts?: { resumeMessageId?: string; branchFrom?: { messageId: string; replace?: boolean } }) {
   const chats = useChats.getState();
   const conversation = chats.conversations[id];
   if (!conversation) return;
@@ -197,13 +317,16 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string }) {
   const endpoint = settings.endpoints.find((e) => e.id === conversation.endpointId);
   const effort = resolveEffort(settings, { endpointId: conversation.endpointId, model: conversation.model });
 
-  const startReply = () =>
-    useChats.getState().addMessage(id, {
-      role: 'assistant',
-      content: [],
-      status: 'streaming',
-      model: conversation.model,
-    });
+  // Only the first reply starts the new version; a steered reply follows it in that version.
+  let branchFrom = opts?.branchFrom;
+  const startReply = () => {
+    const message = { role: 'assistant' as const, content: [], status: 'streaming' as const, model: conversation.model };
+    const from = branchFrom;
+    branchFrom = undefined;
+    return from
+      ? useChats.getState().branch(id, from.messageId, message, { replace: from.replace })
+      : useChats.getState().addMessage(id, message);
+  };
   // A steered reply goes on in a new message after the user's (see `steer`); continuing an
   // interrupted reply reopens it in place so prior thoughts, tool calls and text stay intact.
   let replyId: string;
@@ -554,5 +677,5 @@ async function generateTitle(id: string, chatEndpoint: Endpoint, chatApiKey: str
     .replace(/^["'*#\s]+|["'*.\s]+$/g, '')
     .slice(0, 60);
   const current = useChats.getState().conversations[id];
-  if (current && title && !current.titled) useChats.getState().rename(id, title);
+  if (current && title && !current.titled) useChats.getState().rename(id, current.branchedFrom ? branchedTitle(title) : title);
 }

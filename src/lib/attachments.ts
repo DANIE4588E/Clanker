@@ -33,6 +33,18 @@ export function deleteAttachment(file: string) {
   if (f.exists) f.delete();
 }
 
+/**
+ * Copies a stored attachment under a new name, for a message that gets its own copy (an edit, a
+ * chat branched off): each copy is deleted with the message that holds it.
+ */
+export function duplicateAttachment(file: string) {
+  const source = new File(dir, file);
+  if (!source.exists) return file;
+  const name = `${uid()}${file.match(/\.[^./]+$/)?.[0] ?? ''}`;
+  source.copySync(new File(dir, name));
+  return name;
+}
+
 /** Copies an attachment into the agent workspace under its own name, returning the workspace path. */
 export function saveToWorkspace(ws: Workspace, part: FilePart | ImagePart) {
   ws.ensure();

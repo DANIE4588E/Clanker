@@ -107,13 +107,17 @@ function RelayScrollView({
 type Props = {
   conversationId: string;
   onRegenerate?: (messageId: string) => void;
+  onEdit?: (messageId: string) => void;
+  onBranch?: (messageId: string) => void;
+  /** A reply is running, so the chat's messages can't be changed. */
+  busy?: boolean;
   // Heights of the header and composer floating over the list, so content rests clear of them.
   // The composer's is a shared value: it follows the box's expand animation on the UI thread.
   topInset: number;
   bottomInset: SharedValue<number>;
 };
 
-export const MessageList = memo(function MessageList({ conversationId, onRegenerate, topInset, bottomInset }: Props) {
+export const MessageList = memo(function MessageList({ conversationId, onRegenerate, onEdit, onBranch, busy, topInset, bottomInset }: Props) {
   const { colors } = useTheme();
   const messages = useChats((s) => s.conversations[conversationId]?.messages ?? NO_MESSAGES);
   const listRef = useRef<FlatList<Message>>(null);
@@ -349,9 +353,12 @@ export const MessageList = memo(function MessageList({ conversationId, onRegener
         message={item}
         isLast={item.id === lastAssistantId}
         onRegenerate={onRegenerate}
+        onEdit={onEdit}
+        onBranch={onBranch}
+        busy={busy}
       />
     ),
-    [conversationId, lastAssistantId, onRegenerate],
+    [conversationId, lastAssistantId, onRegenerate, onEdit, onBranch, busy],
   );
 
   return (

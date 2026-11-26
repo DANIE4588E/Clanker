@@ -216,8 +216,10 @@ export function Composer({
   const send = () => {
     if (!canSend) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onSend(text.trim(), attachments);
+    // Cleared first, so an owner that fills the box again on send (ending an edit) keeps what it puts back.
+    const sent = attachments;
     setAttachments([]);
+    onSend(text.trim(), sent);
   };
 
   const continueTurn = () => {

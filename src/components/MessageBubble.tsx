@@ -1,10 +1,12 @@
 import Feather from '@expo/vector-icons/Feather';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { attachmentUri } from '@/lib/attachments';
 import type { ContentPart, FilePart, ImagePart, ToolPart } from '@/lib/providers';
 import { splitQuotes } from '@/lib/quotes';
@@ -33,9 +35,59 @@ import { filesOf, TurnFiles } from './TurnFiles';
 type Props = {
   conversationId: string;
   message: Message;
+  /** The newest reply in the chat. */
   isLast: boolean;
   onRegenerate?: (messageId: string) => void;
+  /** Starts editing one of the user's messages; absent where messages can't be edited (remote chats). */
+  onEdit?: (messageId: string) => void;
+  /** Starts a new chat with the conversation up to this reply. */
+  onBranch?: (messageId: string) => void;
+  /** A reply is running: the chat can't be edited, regenerated or switched to another version. */
+  busy?: boolean;
 };
+
+/** "‹ 2/3 ›" on a message that starts a version of the chat, to switch to the others. */
+function Versions({ conversationId, forkId, disabled }: { conversationId: string; forkId: string; disabled?: boolean }) {
+  const { colors } = useTheme();
+  const fork = useChats(
+    useShallow((s) => {
+      const f = s.conversations[conversationId]?.forks?.[forkId];
+      return { count: f?.versions.length ?? 0, current: f?.current ?? 0 };
+    })
+  );
+  if (fork.count < 2) return null;
+  const go = (to: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    useChats.getState().switchVersion(conversationId, forkId, to);
+  };
+  const first = disabled || fork.current === 0;
+  const last = disabled || fork.current === fork.count - 1;
+  return (
+    <View style={styles.versions}>
+      <Pressable
+        onPress={() => go(fork.current - 1)}
+        disabled={first}
+        hitSlop={8}
+        style={styles.versionStep}
+        accessibilityLabel="Previous version"
+      >
+        <Feather name="chevron-left" size={17} color={first ? colors.textTertiary : colors.textSecondary} />
+      </Pressable>
+      <Text style={[styles.versionText, { color: disabled ? colors.textTertiary : colors.textSecondary }]}>
+        {fork.current + 1}/{fork.count}
+      </Text>
+      <Pressable
+        onPress={() => go(fork.current + 1)}
+        disabled={last}
+        hitSlop={8}
+        style={styles.versionStep}
+        accessibilityLabel="Next version"
+      >
+        <Feather name="chevron-right" size={17} color={last ? colors.textTertiary : colors.textSecondary} />
+      </Pressable>
+    </View>
+  );
+}
 
 function Files({ files, align }: { files: FilePart[]; align: 'flex-end' | 'flex-start' }) {
   const { colors } = useTheme();
@@ -327,7 +379,7 @@ function Thoughts({ text, ms, live, keepOpen }: { text: string; ms?: number; liv
   );
 }
 
-function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: Props) {
+function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onEdit, onBranch, busy }: Props) {
   const { colors } = useTheme();
   const [copied, setCopied] = useState(false);
   const showSpeed = useSettings((s) => s.decodeSpeed);
@@ -378,6 +430,21 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
               </Text>
             </SelectionArea>
           </Pressable>
+        )}
+        {(!!onEdit || !!message.fork) && (
+          <View style={styles.userActions}>
+            {!!message.fork && <Versions conversationId={conversationId} forkId={message.fork} disabled={busy} />}
+            {!!text && (
+              <Pressable onPress={copy} hitSlop={8} style={styles.action} accessibilityLabel="Copy message">
+                <Feather name={copied ? 'check' : 'copy'} size={16} color={colors.textSecondary} />
+              </Pressable>
+            )}
+            {!!onEdit && !busy && (
+              <Pressable onPress={() => onEdit(message.id)} hitSlop={8} style={styles.action} accessibilityLabel="Edit message">
+                <Feather name="edit-2" size={16} color={colors.textSecondary} />
+              </Pressable>
+            )}
+          </View>
         )}
       </View>
     );
@@ -499,14 +566,22 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate }: P
 
       {message.status === 'done' && (
         <View style={styles.actions}>
+          {!!message.fork && <Versions conversationId={conversationId} forkId={message.fork} disabled={busy} />}
           {!!text && (
-            <Pressable onPress={copy} hitSlop={8} style={styles.action}>
+            <Pressable onPress={copy} hitSlop={8} style={styles.action} accessibilityLabel="Copy reply">
               <Feather name={copied ? 'check' : 'copy'} size={16} color={colors.textSecondary} />
             </Pressable>
           )}
-          {isLast && onRegenerate && (
-            <Pressable onPress={() => onRegenerate(message.id)} hitSlop={8} style={styles.action}>
+          {/* Regenerating keeps the reply it replaces as another version, so any reply can be redone. */}
+          {onRegenerate && !busy && (
+            <Pressable onPress={() => onRegenerate(message.id)} hitSlop={8} style={styles.action} accessibilityLabel="Regenerate reply">
               <Feather name="refresh-cw" size={16} color={colors.textSecondary} />
+            </Pressable>
+          )}
+          {/* Branching off the newest reply would only copy the whole chat. */}
+          {onBranch && !busy && !isLast && (
+            <Pressable onPress={() => onBranch(message.id)} hitSlop={8} style={styles.action} accessibilityLabel="Branch in new chat">
+              <MaterialCommunityIcons name="call-split" size={18} color={colors.textSecondary} />
             </Pressable>
           )}
           {!!message.model &&
@@ -582,6 +657,10 @@ const styles = StyleSheet.create({
   thoughtsInner: { borderLeftWidth: 3, paddingLeft: 12, paddingRight: 4 },
   thoughtsText: { fontSize: 14, lineHeight: 21 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2, marginLeft: -6 },
+  userActions: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: -2, marginRight: -6 },
+  versions: { flexDirection: 'row', alignItems: 'center' },
+  versionStep: { paddingVertical: 6, paddingHorizontal: 2 },
+  versionText: { fontSize: 13, fontVariant: ['tabular-nums'], minWidth: 26, textAlign: 'center' },
   action: { padding: 6 },
   modelBrand: { flexDirection: 'row', alignItems: 'center', gap: 5, marginLeft: 6, minWidth: 0, flexShrink: 1 },
   model: { fontSize: 12, marginLeft: 6, flexShrink: 1 },

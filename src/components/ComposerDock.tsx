@@ -1,6 +1,7 @@
+import Feather from '@expo/vector-icons/Feather';
 import { useIsFocused } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Keyboard, Pressable, StyleSheet, View, type TextInputInstance } from 'react-native';
+import { Alert, Keyboard, Pressable, StyleSheet, Text, View, type TextInputInstance } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { OverKeyboardView } from 'react-native-keyboard-controller';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
@@ -67,6 +68,12 @@ type Props = {
   progress: SharedValue<number>;
   /** The dock's height with the composer collapsed, its fade included, whenever it settles. */
   onBaseHeight: (height: number) => void;
+  /** The attachments in the box, when the screen keeps them; otherwise the dock does. */
+  attachments?: AttachmentPart[];
+  onChangeAttachments?: (attachments: AttachmentPart[] | ((prev: AttachmentPart[]) => AttachmentPart[])) => void;
+  /** The box holds an edit of an earlier message; sending sends the edit. */
+  editing?: boolean;
+  onCancelEdit?: () => void;
 };
 
 /**
@@ -86,9 +93,15 @@ export function ComposerDock({
   usage,
   progress,
   onBaseHeight,
+  attachments: controlledAttachments,
+  onChangeAttachments,
+  editing = false,
+  onCancelEdit,
 }: Props) {
   const { colors } = useTheme();
-  const [attachments, setAttachments] = useState<AttachmentPart[]>([]);
+  const [ownAttachments, setOwnAttachments] = useState<AttachmentPart[]>([]);
+  const attachments = controlledAttachments ?? ownAttachments;
+  const setAttachments = onChangeAttachments ?? setOwnAttachments;
   const input = useRef<TextInputInstance>(null);
   const queue = useChats((s) => (conversationId ? s.conversations[conversationId]?.queue : undefined));
   // A message sent while the reply waits on its questions answers them (see lib/chat submitMessage).
@@ -170,6 +183,11 @@ export function ComposerDock({
     lastQuoteCount.current = quoteCount;
   }, [quoteCount]);
 
+  // Starting an edit opens the box on the message.
+  useEffect(() => {
+    if (editing) input.current?.focus();
+  }, [editing]);
+
   // Editing brings a queued message back into the box, after anything already being written there,
   // and its quotes back among the pills.
   const editQueued = (id: string) => {
@@ -222,6 +240,15 @@ export function ComposerDock({
               allowSteer={!remote}
             />
           ) : null}
+          {editing && (
+            <View style={[styles.editing, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Feather name="edit-2" size={14} color={colors.textSecondary} />
+              <Text style={[styles.editingText, { color: colors.textSecondary }]}>Editing message</Text>
+              <Pressable onPress={onCancelEdit} hitSlop={10} accessibilityLabel="Cancel editing" style={styles.editingClose}>
+                <Feather name="x" size={16} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+          )}
           <Composer
             text={draft}
             onChangeText={onChangeDraft}
@@ -230,7 +257,7 @@ export function ComposerDock({
             attachments={attachments}
             onChangeAttachments={setAttachments}
             placeholder={
-              asking ? 'Answer the question' : streaming ? (followUp === 'steer' ? 'Steer the reply' : 'Queue a follow-up') : 'Ask anything'
+              editing ? 'Edit message' : asking ? 'Answer the question' : streaming ? (followUp === 'steer' ? 'Steer the reply' : 'Queue a follow-up') : 'Ask anything'
             }
             inputRef={input}
             streaming={streaming}
@@ -297,4 +324,19 @@ const styles = StyleSheet.create({
   effort: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   veilFade: { height: VEIL_FADE },
   panel: { paddingHorizontal: 28, paddingTop: VEIL_CAP },
+  editing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 6,
+    paddingLeft: 12,
+    paddingRight: 8,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  editingText: { fontSize: 13 },
+  editingClose: { padding: 2 },
 });

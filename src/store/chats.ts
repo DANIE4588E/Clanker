@@ -33,6 +33,19 @@ export interface Message {
   steps?: StepStats[];
   /** Decode speed and cache hits over the chat's last few responses, as of this reply's last one. */
   stats?: ReplyStats;
+  /** Set on the first message of each version of a fork: the key of the fork in `forks`. */
+  fork?: string;
+}
+
+/**
+ * Where the conversation splits into versions, made by editing a message or regenerating a reply.
+ * Each version is the run of messages from the split to the end of the chat as it was. The one
+ * on screen lives in `messages` and its slot here is empty; switching swaps them.
+ */
+export interface Fork {
+  versions: Message[][];
+  /** The version shown. */
+  current: number;
 }
 
 /**
@@ -120,6 +133,10 @@ export interface Conversation {
   archivedAt?: number;
   /** Messages waiting for the running reply, oldest first. */
   queue?: QueuedMessage[];
+  /** The chat this one was branched off (see lib/chat branchToNewChat); its titles say so. */
+  branchedFrom?: string;
+  /** The versions hidden behind each fork in the chat (see Fork), by key. */
+  forks?: Record<string, Fork>;
 }
 
 interface ChatsState {
@@ -160,11 +177,26 @@ interface ChatsState {
   observe: (id: string, entries: Record<string, string | null>) => void;
   /** Removes the message with `messageId` and everything after it. */
   truncateFrom: (id: string, messageId: string) => void;
+  /**
+   * Starts a new version of the chat at `messageId` with `message` in its place, keeping that
+   * message and everything after it as the version before. With `replace`, the old run is
+   * dropped instead (a failed reply being retried). Returns the new message's id.
+   */
+  branch: (id: string, messageId: string, message: Omit<Message, 'id' | 'createdAt'>, opts?: { replace?: boolean }) => string;
+  /** Shows version `index` of a fork in place of the one on screen. */
+  switchVersion: (id: string, forkId: string, index: number) => void;
+  /** Adds a whole conversation, as made by copying one (see lib/chat branchToNewChat). */
+  insert: (conversation: Conversation) => void;
 }
 
 /** A tool call the model is still writing. */
 function isDraft(part: ContentPart): boolean {
   return part.type === 'tool' && part.status === 'writing';
+}
+
+/** Every message in the chat, the versions hidden behind its forks included. */
+export function allMessages(c: Pick<Conversation, 'messages' | 'forks'>): Message[] {
+  return [...c.messages, ...Object.values(c.forks ?? {}).flatMap((f) => f.versions.flat())];
 }
 
 function imagesOf(messages: Pick<Message, 'content'>[]) {
@@ -189,10 +221,16 @@ export const useChats = create<ChatsState>()(
           return { conversations: { ...s.conversations, [id]: { ...c, ...fn(c) } } };
         });
 
+      // A message in a version off screen still takes updates, as from a background job finishing.
       const patchMessage = (id: string, messageId: string, fn: (m: Message) => Partial<Message>) =>
-        patchConversation(id, (c) => ({
-          messages: c.messages.map((m) => (m.id === messageId ? { ...m, ...fn(m) } : m)),
-        }));
+        patchConversation(id, (c) => {
+          const patch = (list: Message[]) => list.map((m) => (m.id === messageId ? { ...m, ...fn(m) } : m));
+          if (c.messages.some((m) => m.id === messageId) || !c.forks) return { messages: patch(c.messages) };
+          const forks = Object.fromEntries(
+            Object.entries(c.forks).map(([key, f]) => [key, { ...f, versions: f.versions.map(patch) }])
+          );
+          return { forks };
+        });
 
       return {
         conversations: {},
@@ -224,7 +262,7 @@ export const useChats = create<ChatsState>()(
           const c = get().conversations[id];
           if (!c) return;
           try { removeRemoteCache(id); } catch {}
-          imagesOf([...c.messages, ...(c.queue ?? []).map((q) => ({ content: q.attachments }))]).forEach(deleteAttachment);
+          imagesOf([...allMessages(c), ...(c.queue ?? []).map((q) => ({ content: q.attachments }))]).forEach(deleteAttachment);
           if (!c.projectId && !c.workspace) {
             try {
               chatWorkspace(id).remove();
@@ -324,6 +362,43 @@ export const useChats = create<ChatsState>()(
             // Images in the dropped messages are kept: regenerate only drops assistant replies.
             return { messages: c.messages.slice(0, index) };
           }),
+        branch: (id, messageId, message, opts) => {
+          const newId = uid();
+          const now = Date.now();
+          patchConversation(id, (c) => {
+            const index = c.messages.findIndex((m) => m.id === messageId);
+            if (index < 0) return {};
+            const head = c.messages[index];
+            const before = c.messages.slice(0, index);
+            const added = { ...message, id: newId, createdAt: now };
+            if (opts?.replace) {
+              return { updatedAt: now, messages: [...before, head.fork ? { ...added, fork: head.fork } : added] };
+            }
+            const forkId = head.fork ?? uid();
+            const fork = c.forks?.[forkId] ?? { versions: [[]], current: 0 };
+            const old = c.messages.slice(index).map((m, i) => (i === 0 ? { ...m, fork: forkId } : m));
+            const versions = [...fork.versions.map((v, i) => (i === fork.current ? old : v)), []];
+            return {
+              updatedAt: now,
+              messages: [...before, { ...added, fork: forkId }],
+              forks: { ...c.forks, [forkId]: { versions, current: versions.length - 1 } },
+            };
+          });
+          return newId;
+        },
+        switchVersion: (id, forkId, to) =>
+          patchConversation(id, (c) => {
+            const fork = c.forks?.[forkId];
+            const index = c.messages.findIndex((m) => m.fork === forkId);
+            if (!fork || index < 0 || to === fork.current || !fork.versions[to]?.length) return {};
+            const versions = fork.versions.map((v, i) => (i === fork.current ? c.messages.slice(index) : i === to ? [] : v));
+            return {
+              messages: [...c.messages.slice(0, index), ...fork.versions[to]],
+              forks: { ...c.forks, [forkId]: { versions, current: to } },
+            };
+          }),
+        insert: (conversation) =>
+          set((s) => ({ conversations: { ...s.conversations, [conversation.id]: conversation } })),
       };
     },
     {
@@ -345,14 +420,16 @@ export const useChats = create<ChatsState>()(
         for (const c of Object.values(conversations)) {
           c.backendId ??= 'local';
           if (c.queue) c.queue = c.queue.map(({ steer: _, ...q }) => q);
-          c.messages = c.messages.map((m) => {
+          const settle = (m: Message): Message => {
             const content = m.content.map((p) =>
               p.type === 'tool' && p.background?.status === 'running' ? { ...p, background: { ...p.background, status: 'lost' as const } } : p
             );
             return m.status === 'streaming' && c.backendId === 'local'
               ? { ...m, status: 'done', content: interruptContent(content), interrupted: 'Interrupted when the app closed' }
               : { ...m, content };
-          });
+          };
+          c.messages = c.messages.map(settle);
+          for (const f of Object.values(c.forks ?? {})) f.versions = f.versions.map((v) => v.map(settle));
         }
         return { ...current, conversations };
       },
