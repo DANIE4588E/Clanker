@@ -43,6 +43,11 @@ export function describeCall(name: string, input: Record<string, unknown>) {
       return `Delete ${p('path')}`;
     case 'move_path':
       return `${input.copy ? 'Copy' : 'Move'} ${p('from')} → ${p('to')}`;
+    case 'present_files': {
+      const paths = Array.isArray(input.paths) ? input.paths.filter((x): x is string => typeof x === 'string') : [];
+      if (paths.length === 1) return `Present ${paths[0].split('/').pop()}`;
+      return paths.length ? `Present ${paths.length} files` : 'Present files';
+    }
     case 'list_files':
       return p('pattern') ? `Find ${p('pattern')}` : `List ${p('path') || 'workspace'}`;
     case 'search_files':

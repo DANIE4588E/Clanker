@@ -9,6 +9,8 @@ export default function DrawerLayout() {
   const { width } = useWindowDimensions();
   // The effort slider swipes across the same edge, so pause the drawer gesture while it is open.
   const effortOpen = useUI((s) => s.effortOpen);
+  // So is a web preview being touched, which takes drags for itself.
+  const webTouch = useUI((s) => s.webTouch);
 
   return (
     <Drawer
@@ -16,7 +18,7 @@ export default function DrawerLayout() {
       screenOptions={{
         headerShown: false,
         drawerType: 'slide',
-        swipeEnabled: !effortOpen,
+        swipeEnabled: !effortOpen && !webTouch,
         drawerStyle: { width: Math.min(width * 0.85, 360), backgroundColor: colors.sidebar },
         overlayColor: colors.overlay,
         swipeEdgeWidth: width / 2,

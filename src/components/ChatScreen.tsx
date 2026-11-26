@@ -204,6 +204,32 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     [currentId, editing, endEdit, open, quotes]
   );
 
+  // A new chat started from another screen (the Library's "Chat about this"), on the main screen
+  // only: its files go in the box, or are sent with a question asked there.
+  useEffect(() => {
+    if (onBack) return;
+    return useUI.subscribe((s, prev) => {
+      const seed = s.seed;
+      if (!seed || seed === prev.seed) return;
+      useUI.setState({ seed: null });
+      // After the other listeners: leaving a chat puts back the box an edit set aside.
+      setTimeout(() => {
+        if (seed.send) {
+          try {
+            useUI.getState().open(submitMessage(null, seed.text ?? '', seed.attachments));
+          } catch (e) {
+            setAttachments((prev) => [...prev, ...seed.attachments]);
+            reportSendError(e);
+          }
+          return;
+        }
+        setAttachments((prev) => [...prev, ...seed.attachments]);
+        if (seed.text) setDraft(seed.text);
+        setComposerFocus((n) => n + 1);
+      }, 0);
+    });
+  }, [onBack]);
+
   const onEdit = useCallback(
     (messageId: string) => {
       if (!currentId || streaming) return;

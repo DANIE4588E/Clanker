@@ -106,7 +106,7 @@ export function ChatHeader({ title, onMenu, onBack, onTitle, onMore, memoryOff, 
           accessibilityLabel="Chat menu"
           accessibilityRole="button"
         >
-          <Feather name="more-horizontal" size={21} color={colors.text} />
+          <Feather name="more-vertical" size={21} color={colors.text} />
         </Pressable>
       )}
     </View>

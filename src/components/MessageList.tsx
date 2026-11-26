@@ -41,6 +41,7 @@ import * as Haptics from '@/lib/haptics';
 import { setStorageWriteDeferred } from '@/lib/storage';
 import { useTheme } from '@/lib/theme';
 import { useChats, type Message } from '@/store/chats';
+import { useUI } from '@/store/ui';
 import { FindContext, type FindTarget } from './FindHighlight';
 import { MessageBubble } from './MessageBubble';
 import { ChatScrollContext, useJsScrollRelay, type ChatScrollHandle } from './NestedScroll';
@@ -144,6 +145,7 @@ export const MessageList = memo(function MessageList({
   const findOther = useMemo<FindTarget>(() => (needle ? { needle, current: false } : null), [needle]);
   const { colors } = useTheme();
   const messages = useChats((s) => s.conversations[conversationId]?.messages ?? NO_MESSAGES);
+  const webTouch = useUI((s) => s.webTouch);
   const listRef = useRef<FlatList<Message>>(null);
   const [scrollState, setScrollState] = useState({ id: conversationId, pinned: true, showJump: false });
   const pinnedToBottom = scrollState.id === conversationId ? scrollState.pinned : true;
@@ -519,6 +521,8 @@ export const MessageList = memo(function MessageList({
             // Selectable text takes focus when tapped or held, and on Android the list then scrolls
             // the focused text into view, which in an inverted list lands somewhere else entirely.
             scrollsChildToFocus={false}
+            // A web preview being touched gets the drag instead.
+            scrollEnabled={!webTouch}
             renderScrollComponent={useJsScrollRelay ? renderScrollComponent : undefined}
             onScroll={onScroll}
             onScrollToIndexFailed={onScrollToIndexFailed}

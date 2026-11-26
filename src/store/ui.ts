@@ -1,5 +1,14 @@
 import { create } from 'zustand';
+import type { AttachmentPart } from '@/lib/providers';
 import { uid } from '@/lib/storage';
+
+/** Something for the main chat screen's box, from another screen (the Library, say). */
+export type ComposerSeed = {
+  attachments: AttachmentPart[];
+  text?: string;
+  /** Sends it at once, as a new chat, rather than leaving it in the box. */
+  send?: boolean;
+};
 
 /** Which chat is on screen, or what the chat about to be started will be. */
 type ChatView = {
@@ -15,10 +24,20 @@ interface UIState extends ChatView {
   /** Effort slider panel is up; the drawer swipe is disabled while it is. */
   effortOpen: boolean;
   /**
+   * A finger is on an interactive web preview in a chat: the chat doesn't scroll and the drawer
+   * doesn't open, so the page gets the drag (a game, a slider).
+   */
+  webTouch: boolean;
+  setWebTouch: (on: boolean) => void;
+  /**
    * Screens pushed over the main chat screen (a project page, a project's chat) each show their
    * own chat view. Each layer keeps the view beneath it, put back when the layer is popped.
    */
   layers: { token: string; beneath: ChatView }[];
+  /** Waiting for the main chat screen to take it into its box; it clears it once taken. */
+  seed: ComposerSeed | null;
+  /** Starts a new chat on the main screen with `seed` in the box (or sent). */
+  startWith: (seed: ComposerSeed) => void;
   open: (id: string | null) => void;
   /** Shows the "new chat" state for a chat in the project. */
   openNewInProject: (projectId: string) => void;
@@ -39,9 +58,13 @@ const viewOf = ({ currentId, newChatMemoryOff, newChatProjectId }: ChatView): Ch
 export const useUI = create<UIState>()((set, get) => ({
   currentId: null,
   effortOpen: false,
+  webTouch: false,
+  setWebTouch: (webTouch) => set({ webTouch }),
   newChatMemoryOff: false,
   newChatProjectId: null,
   layers: [],
+  seed: null,
+  startWith: (seed) => set({ currentId: null, effortOpen: false, newChatMemoryOff: false, newChatProjectId: null, seed }),
   open: (currentId) => set({ currentId, effortOpen: false, newChatMemoryOff: false, newChatProjectId: null }),
   openNewInProject: (newChatProjectId) =>
     set({ currentId: null, effortOpen: false, newChatMemoryOff: false, newChatProjectId }),

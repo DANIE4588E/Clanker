@@ -138,10 +138,51 @@ function storedName(name: string) {
 }
 
 /**
- * Picks documents (and any file type). Text-like files are read and inlined into the message;
+ * Brings one file in as an attachment. Text-like files are read and inlined into the message;
  * images route through the same downscale pipeline as Photos; other binaries are copied into
  * the attachments dir and sent as base64 to providers that take them.
  */
+export async function importFile(asset: { uri: string; name: string; mimeType?: string; size?: number }): Promise<FilePart | ImagePart> {
+  const name = asset.name || 'file';
+  const mimeType = asset.mimeType || 'application/octet-stream';
+  if (asset.size && asset.size > MAX_FILE_BYTES) throw new Error(`"${name}" is larger than 20 MB.`);
+
+  if (mimeType.startsWith('image/')) {
+    return importAsset({ uri: asset.uri });
+  }
+
+  if (isTextLike(name, mimeType)) {
+    try {
+      let text = await new File(asset.uri).text();
+      // The inline copy can be truncated, so keep the original for the agent's workspace.
+      const file = storedName(name);
+      await storeFrom(asset.uri, file);
+      if (new File(dir, file).size > MAX_FILE_BYTES) {
+        deleteAttachment(file);
+        throw new Error(`"${name}" is larger than 20 MB.`);
+      }
+      if (text.length > MAX_TEXT_CHARS) {
+        text = text.slice(0, MAX_TEXT_CHARS) + '\n[…truncated]';
+      }
+      return { type: 'file', name, mimeType, text, size: asset.size, ...(file ? { file } : {}) };
+    } catch {
+      // Some pickers hand back a URI the text reader can't open; treat it as binary below.
+    }
+  }
+
+  if (asset.size && asset.size > MAX_FILE_BYTES) {
+    throw new Error(`"${name}" is larger than 20 MB.`);
+  }
+  const stored = storedName(name);
+  await storeFrom(asset.uri, stored);
+  if (new File(dir, stored).size > MAX_FILE_BYTES) {
+    deleteAttachment(stored);
+    throw new Error(`"${name}" is larger than 20 MB.`);
+  }
+  return { type: 'file', file: stored, name, mimeType, size: asset.size };
+}
+
+/** Picks documents (and any file type) and brings each in with importFile. */
 export async function pickFiles(): Promise<(FilePart | ImagePart)[]> {
   // No cache copy: on Android expo-file-system rejected reads of the picker's cached file:// copy
   // with "Missing 'READ' permission", while the provider's content:// URI skips that path check and
@@ -150,44 +191,6 @@ export async function pickFiles(): Promise<(FilePart | ImagePart)[]> {
   const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: false });
   if (result.canceled) return [];
   return Promise.all(
-    result.assets.map(async (asset): Promise<FilePart | ImagePart> => {
-      const name = asset.name || 'file';
-      const mimeType = asset.mimeType || 'application/octet-stream';
-      if (asset.size && asset.size > MAX_FILE_BYTES) throw new Error(`"${name}" is larger than 20 MB.`);
-
-      if (mimeType.startsWith('image/')) {
-        return importAsset({ uri: asset.uri });
-      }
-
-      if (isTextLike(name, mimeType)) {
-        try {
-          let text = await new File(asset.uri).text();
-          // The inline copy can be truncated, so keep the original for the agent's workspace.
-          const file = storedName(name);
-          await storeFrom(asset.uri, file);
-          if (new File(dir, file).size > MAX_FILE_BYTES) {
-            deleteAttachment(file);
-            throw new Error(`"${name}" is larger than 20 MB.`);
-          }
-          if (text.length > MAX_TEXT_CHARS) {
-            text = text.slice(0, MAX_TEXT_CHARS) + '\n[…truncated]';
-          }
-          return { type: 'file', name, mimeType, text, size: asset.size, ...(file ? { file } : {}) };
-        } catch {
-          // Some pickers hand back a URI the text reader can't open; treat it as binary below.
-        }
-      }
-
-      if (asset.size && asset.size > MAX_FILE_BYTES) {
-        throw new Error(`"${name}" is larger than 20 MB.`);
-      }
-      const stored = storedName(name);
-      await storeFrom(asset.uri, stored);
-      if (new File(dir, stored).size > MAX_FILE_BYTES) {
-        deleteAttachment(stored);
-        throw new Error(`"${name}" is larger than 20 MB.`);
-      }
-      return { type: 'file', file: stored, name, mimeType, size: asset.size };
-    })
+    result.assets.map((asset) => importFile({ uri: asset.uri, name: asset.name, mimeType: asset.mimeType, size: asset.size }))
   );
 }

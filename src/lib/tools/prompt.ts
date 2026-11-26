@@ -9,7 +9,7 @@ import { skillsDiff, skillsFor, skillsSection } from '../skills';
 import { formatSize } from '../workspace';
 import { toolOn } from './index';
 
-const FILE_TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'move_path', 'delete_path'];
+const FILE_TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'edit_file', 'move_path', 'delete_path', 'present_files'];
 const RUN_TOOLS = ['run_python', 'run_javascript', 'run_shell'];
 
 const lines = (...items: (string | false)[]) => items.filter(Boolean).join('\n');
@@ -153,7 +153,11 @@ export function agentSystemPrompt() {
     'After the latest message or tool result you get a <context> note with the current time and the size of the history, plus the workspace contents, background jobs, and memory and skill changes when there is something new to show. Older notes stay where they were; the latest one is current.',
     lines(
       '# Workspace',
-      `${local ? 'All file tools take paths relative to the workspace root. ' : ''}Files the user attaches are copied into the workspace (their paths are noted in the message). Files you create there show up in the chat, where the user can open or share them, so save deliverables (reports, spreadsheets, slides, PDFs, images, code) as real files in the workspace and mention their names.`
+      `${local ? 'All file tools take paths relative to the workspace root. ' : ''}Files the user attaches are copied into the workspace (their paths are noted in the message). Files you create there show up in the chat, where the user can open or share them, so save deliverables (reports, spreadsheets, slides, PDFs, images, code) as real files in the workspace and mention their names.${
+        has('present_files')
+          ? " When a reply makes files, finish by calling present_files with the ones meant for the user: they show in the chat and in the user's Library, while scratch scripts, checks, tests and intermediate files you leave out stay hidden."
+          : ''
+      }`
     ),
     ask && askSection,
     local && files,
@@ -165,6 +169,8 @@ export function agentSystemPrompt() {
       `- Images: \`![description](url)\` shows an image inline. Use only real image URLs: ${
         fetch ? "ones in pages you fetched (web_fetch keeps a page's images and reports its preview image) or " : ''
       }workspace paths of images you made, e.g. \`![Revenue by month](charts/revenue.png)\`. Never guess an image URL.`,
+      local &&
+        "- Web pages: an HTML page you made in the workspace (an app, a game, an interactive chart) renders live in the chat, where the user can use it. It shows under your reply on its own; to place it in your text, write `![title](path/to/page.html)`. Show the page itself rather than a screenshot of it.",
       '- Image cards: an ```images block holding a JSON array of {"url", "title", "subtitle"?, "link"?, "fit"?} shows images side by side with captions, e.g. the products being compared. Set "fit": "contain" for product shots, logos and diagrams so they aren\'t cropped; "link" is opened on tap.',
       '- Charts: a ```chart block holding JSON draws a chart: {"type": "bar" | "hbar" | "line", "title", "labels": [...], "series": [{"name", "values": [...]}], "unit"?, "caption"?}. Use bar to compare amounts (one series, or a few for grouped bars), hbar for rankings or long category names, line for change over time. "unit" is shown with values ("tok/s", "%", "$"); "caption" names the source. At most 8 series, numbers only, null for a gap. The JSON must be valid: no comments or trailing commas.',
       "- Use a table for specs and side-by-side comparisons, a chart when the shape of the numbers is the point, and images when seeing the thing helps. Don't add visuals for their own sake."

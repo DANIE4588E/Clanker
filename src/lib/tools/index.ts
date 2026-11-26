@@ -321,6 +321,42 @@ const editFile: Tool = {
   },
 };
 
+// A folder handed over whole (a website, a game) presents at most this many of its files.
+const MAX_PRESENTED = 100;
+
+const presentFiles: Tool = {
+  name: 'present_files',
+  description:
+    "Hand finished files to the user. They appear as cards under your reply and in the user's Library, where they can preview, share and save them. " +
+    'Call it once the work is done, with only the files meant for the user (the report, the chart, the app or game and the files it needs to run). ' +
+    'Leave out scratch and helper scripts, checks, tests, logs and intermediate files. A folder path presents every file in it. ' +
+    'Without this call, every file the reply created or changed is shown.',
+  parameters: {
+    type: 'object',
+    properties: {
+      paths: { type: 'array', items: { type: 'string' }, description: 'Workspace-relative paths of existing files or folders.' },
+    },
+    required: ['paths'],
+  },
+  async run(input, { workspace: ws }) {
+    const raw: unknown[] = Array.isArray(input.paths) ? input.paths : typeof input.paths === 'string' ? [input.paths] : [];
+    if (!raw.length) throw new ToolError('Pass the paths of the files to present.');
+    const found = new Set<string>();
+    const missing: string[] = [];
+    for (const value of raw) {
+      const path = ws.normalizePath(String(value));
+      if (path && ws.dirAt(path).exists) {
+        for (const e of ws.walk(path, MAX_PRESENTED)) found.add(e.path);
+      } else if (path && ws.fileAt(path).exists) found.add(path);
+      else missing.push(String(value));
+    }
+    const files = [...found].slice(0, MAX_PRESENTED);
+    if (!files.length) throw new ToolError(`None of these exist in the workspace: ${missing.join(', ')}.`);
+    const note = missing.length ? ` Not found, so not presented: ${missing.join(', ')}.` : '';
+    return { output: `Presented ${files.length} file${files.length === 1 ? '' : 's'} to the user: ${files.join(', ')}.${note}`, files };
+  },
+};
+
 const deletePath: Tool = {
   name: 'delete_path',
   description: 'Delete a workspace file or folder (folders are deleted with everything in them).',
@@ -1110,6 +1146,7 @@ const TOOLS: Tool[] = [
   editFile,
   movePath,
   deletePath,
+  presentFiles,
   runPython,
   runJavaScript,
   runShell,
@@ -1184,7 +1221,8 @@ export async function executeTool(call: ToolCall, ctx: Omit<ToolContext, 'callId
   try {
     const input = jobsOn() ? call.input : { ...call.input, background: undefined };
     const outcome = await tool.run(input, { ...ctx, callId: call.id, workspace: workspaceFor(ctx.conversationId) });
-    if (!outcome.isError) {
+    // Presenting files only points at them; the model hasn't necessarily seen them as they are.
+    if (!outcome.isError && call.name !== presentFiles.name) {
       // What the model has now seen as it is: anything it read, and anything it or its scripts wrote.
       const read = call.name === 'read_file' && typeof call.input.path === 'string' ? [call.input.path] : [];
       markObserved(ctx.conversationId, [...read, ...(outcome.files ?? [])]);

@@ -8,6 +8,7 @@ import type { Workspace } from '@/lib/workspace';
 import { useWorkspace } from '@/lib/useWorkspace';
 import { REPLY_GUTTER } from './Chart';
 import { HorizontalScroll } from './HorizontalScroll';
+import { WebPreview } from './WebPreview';
 
 export type ImageCard = { url: string; title?: string; subtitle?: string; link?: string; fit?: 'cover' | 'contain' };
 
@@ -69,17 +70,29 @@ function Broken({ height }: { height?: number }) {
   );
 }
 
-/** A markdown image: full width at its own aspect ratio, tap to open. */
+/**
+ * A markdown image: full width at its own aspect ratio, tap to open. A web page in the workspace
+ * renders live instead, to use in place.
+ */
 function ChatImageInner({ src, alt, title }: { src: string; alt?: string; title?: string }) {
   const { colors } = useTheme();
   // Resolving a workspace path checks the file, so it is done once, not on every streamed token.
   const ws = useWorkspace();
-  const source = useMemo(() => ({ uri: resolve(src, ws).uri }), [src, ws]);
+  const resolved = useMemo(() => resolve(src, ws), [src, ws]);
+  const source = useMemo(() => ({ uri: resolved.uri }), [resolved]);
   const uri = source.uri;
   // Whether the image was seen before, fixed at mount so the fade setting doesn't change under a loading image.
   const [known] = useState(() => ratios.has(uri));
   const [ratio, setRatio] = useState(ratios.get(uri) ?? 16 / 10);
   const [failed, setFailed] = useState(false);
+  if (ws && resolved.workspace && /\.html?$/i.test(resolved.workspace)) {
+    return (
+      <View style={styles.inline}>
+        <WebPreview ws={ws} path={resolved.workspace} />
+        {!!(title || alt) && <Text style={[styles.inlineCaption, { color: colors.textTertiary }]}>{title || alt}</Text>}
+      </View>
+    );
+  }
   return (
     <View style={styles.inline}>
       {failed ? (

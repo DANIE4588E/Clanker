@@ -8,7 +8,7 @@ import { splitQuotes } from './quotes';
 const dir = new Directory(Paths.cache, 'share');
 
 /** A fresh file in the share folder, named for the person it is shown to. */
-function shareFile(name: string) {
+export function shareFile(name: string) {
   if (!dir.exists) dir.create({ intermediates: true });
   const file = new File(dir, sanitize(name));
   if (file.exists) file.delete();
@@ -59,7 +59,7 @@ export function chatUploads(c: Conversation): Upload[] {
 }
 
 /** The upload as a file on disk: its stored copy, or its inlined text written out under its name. */
-function uploadFile(u: Upload) {
+export function uploadFile(u: Upload) {
   const stored = u.part.file ? new File(attachmentUri(u.part.file)) : null;
   if (stored?.exists) return stored;
   if (u.part.type === 'file' && u.part.text != null) {

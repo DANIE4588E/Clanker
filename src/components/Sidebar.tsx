@@ -86,7 +86,7 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
     else open(id);
   };
 
-  const goTo = (href: '/projects' | '/skills' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
+  const goTo = (href: '/projects' | '/library' | '/skills' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
     navigation.closeDrawer();
     router.push(href);
   };
@@ -122,6 +122,13 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
       >
         <Feather name="folder" size={18} color={colors.text} />
         <Text style={[styles.itemText, { color: colors.text, fontWeight: '500' }]}>Projects</Text>
+      </Pressable>
+      <Pressable
+        onPress={() => goTo('/library')}
+        style={({ pressed }) => [styles.item, styles.row, pressed && { backgroundColor: colors.surfaceHover }]}
+      >
+        <Feather name="layers" size={18} color={colors.text} />
+        <Text style={[styles.itemText, { color: colors.text, fontWeight: '500' }]}>Library</Text>
       </Pressable>
       <Pressable
         onPress={() => goTo('/skills')}

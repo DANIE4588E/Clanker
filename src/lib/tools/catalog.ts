@@ -23,6 +23,7 @@ export const LOCAL_TOOL_GROUPS: ToolGroup[] = [
       { names: ['edit_file'], title: 'Edit files', detail: 'Change parts of an existing file' },
       { names: ['move_path'], title: 'Move & rename', detail: 'Reorganise files and folders' },
       { names: ['delete_path'], title: 'Delete files', detail: 'Remove files and folders' },
+      { names: ['present_files'], title: 'Present files', detail: 'Hand finished files to you and your Library' },
     ],
   },
   {

@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, useWindowDimensions } from 'react-native';
+import { Fragment, useEffect, useState } from 'react';
+import { Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -16,6 +16,8 @@ export type MenuItem = {
   destructive?: boolean;
   /** Marks a row that leads on to another choice (a list of projects, say) with a chevron. */
   more?: boolean;
+  /** Sets the row apart from the ones above it with a line. */
+  separated?: boolean;
 };
 
 /** Where the menu opens: the screen point that was pressed. */
@@ -25,6 +27,7 @@ const WIDTH = 270;
 const ROW = 56;
 const PAD = 8;
 const MARGIN = 16;
+const SEPARATOR = 17;
 
 const ENTER = { duration: 200, easing: Easing.bezier(0.23, 1, 0.32, 1) };
 const EXIT = { duration: 120, easing: Easing.bezier(0.3, 0, 0.8, 0.6) };
@@ -74,7 +77,7 @@ export function ContextMenu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchor]);
 
-  const height = (shown?.items.length ?? 0) * ROW + PAD * 2;
+  const height = (shown?.items ?? []).reduce((h, item) => h + ROW + (item.separated ? SEPARATOR : 0), PAD * 2);
   const point = shown?.anchor ?? { x: 0, y: 0 };
   const below = point.y + height + MARGIN <= screen.height - insets.bottom;
   const top = below ? point.y + 4 : Math.max(insets.top + MARGIN, point.y - height - 4);
@@ -101,7 +104,7 @@ export function ContextMenu({
       >
         {shown.items.map((item) => {
           const color = item.destructive ? colors.danger : colors.text;
-          return (
+          const row = (
             <Pressable
               key={item.label}
               onPress={() => {
@@ -119,6 +122,13 @@ export function ContextMenu({
               <Text style={[styles.label, { color }]}>{item.label}</Text>
               {item.more && <Feather name="chevron-right" size={18} color={colors.textTertiary} />}
             </Pressable>
+          );
+          if (!item.separated) return row;
+          return (
+            <Fragment key={item.label}>
+              <View style={[styles.separator, { backgroundColor: colors.border }]} />
+              {row}
+            </Fragment>
           );
         })}
       </Animated.View>
@@ -141,4 +151,5 @@ const styles = StyleSheet.create({
   },
   row: { height: ROW, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20 },
   label: { fontSize: 17, flex: 1 },
+  separator: { height: StyleSheet.hairlineWidth, marginHorizontal: 20, marginVertical: (SEPARATOR - StyleSheet.hairlineWidth) / 2 },
 });

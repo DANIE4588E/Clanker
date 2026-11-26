@@ -539,7 +539,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           onToggle={() => {}}
         />
       )}
-      {!!made.length && <TurnFiles files={made} />}
+      {!!made.length && <TurnFiles files={made} text={messageText(message)} />}
       {!onRegenerate && <RemoteReply chatId={conversationId} reply={message.remote} reconnect={!!message.error} />}
       {message.error && message.status !== 'error' && <Text style={{ color: colors.textSecondary }}>{message.error}</Text>}
 

@@ -94,6 +94,9 @@ export default function RootLayout() {
               <Stack.Screen name="settings/files" options={{ title: 'Files' }} />
               <Stack.Screen name="usage" options={{ title: 'Usage' }} />
               <Stack.Screen name="chats/files" options={{ title: 'Uploaded files' }} />
+              <Stack.Screen name="library/index" options={{ headerShown: false }} />
+              <Stack.Screen name="library/file" options={{ headerShown: false }} />
+              <Stack.Screen name="library/deleted" options={{ title: 'Deleted' }} />
               <Stack.Screen name="projects/index" options={{ title: 'Projects' }} />
               <Stack.Screen name="projects/[id]" options={{ title: '' }} />
               <Stack.Screen name="projects/chat" options={{ headerShown: false }} />
