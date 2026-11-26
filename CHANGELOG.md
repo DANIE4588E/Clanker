@@ -12,6 +12,13 @@
 ## Todo lists
 - A new **todo_write** tool lets models keep a checklist for longer tasks. It shows above the box as a `2/5` chip with the current step; tap it for the full list, with done items struck through. Models are told the list's state through context notes, so prompts still cache.
 
+## Smoother long chats and streaming
+- Chats are now saved **one file per chat**, and only chats that changed are written, so saving while a reply streams no longer re-saves every chat on your phone. Your existing chats move over the first time anything is saved; a damaged file now loses only that one chat.
+- A streaming reply updates the screen once per batch of tokens instead of up to three times, and replies that have worked for a long time no longer recompute every step, thought and site on each token.
+- The fade-in of new words steps 30 times a second instead of 60, and long code blocks skip it.
+- Fewer messages stay rendered off screen, and only the ones on screen glide as a reply wraps to a new line.
+- The context meter no longer re-measures every tool call in the chat each second.
+
 ## Under the hood
 - Plan mode, goals and todo lists are reported to the model in the per-step context note only when they change, and the system prompt only names the tools that are turned on.
 
