@@ -1,4 +1,5 @@
 import { pluginOfTool, pluginTools } from '../plugins/catalog';
+import { todosOf } from './plan';
 import { PLUGIN_LABELS } from './plugins';
 
 const short = (text: string) => (text.length > 60 ? `${text.slice(0, 60).trimEnd()}…` : text);
@@ -90,8 +91,22 @@ export function describeCall(name: string, input: Record<string, unknown>) {
       return `Search chats “${p('query')}”`;
     case 'read_chat':
       return 'Read an earlier chat';
+    case 'goal_start':
+      return p('goal') ? `Start goal “${short(p('goal'))}”` : 'Start a goal';
+    case 'goal_edit':
+      return p('goal') ? `Change goal to “${short(p('goal'))}”` : 'Change the goal';
+    case 'goal_delete':
+      return 'Remove the goal';
     case 'goal_done':
       return input.achieved === false ? 'Stopped working on the goal' : 'Goal achieved';
+    case 'exit_plan_mode':
+      return p('title') ? `Plan: ${short(p('title'))}` : 'Submit the plan';
+    case 'todo_write': {
+      const todos = todosOf(input);
+      if (!Array.isArray(input.todos)) return 'Update todo list';
+      if (!todos.length) return 'Clear todo list';
+      return `Todo list · ${todos.filter((t) => t.status === 'completed').length}/${todos.length} done`;
+    }
     case 'skill_view':
       return p('file') ? `Read ${p('name')}/${p('file')}` : `Use skill ${p('name')}`;
     case 'skill_manage':

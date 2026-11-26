@@ -2,7 +2,7 @@ import type Feather from '@expo/vector-icons/Feather';
 import { useChats, type Conversation } from '@/store/chats';
 import { useLibrary } from '@/store/library';
 import { useSkills } from '@/store/skills';
-import { COMMANDS, goalCommand, isPlanRequest } from './commands';
+import { COMMANDS, goalCommand, planCommand } from './commands';
 import { KIND_LABEL, libraryItems, type LibraryItem } from './library';
 import { readChat } from './memory';
 import { PLUGINS, pluginReady, type PluginId } from './plugins/catalog';
@@ -397,25 +397,21 @@ export function resolveMentions(
     if (lines.length) notes.push(`[What the user's @mentions and /mentions in this message refer to:\n${lines.join('\n')}]`);
   }
 
-  if (isPlanRequest(text)) {
+  const plan = planCommand(text);
+  const planning = !!plan && 'start' in plan;
+  if (planning) {
     notes.push(
-      "[/plan: Plan this before doing it. Look into whatever you need to (read files, search, look things up), but change nothing: tools that write files, run code, act in apps or otherwise change things are refused for this reply. Reply with a concise, concrete plan: the steps, what each one touches, and anything the user needs to decide. End by asking whether to go ahead; once they agree, carry it out.]"
+      "[/plan: Plan mode is on for this chat: the user wants a plan they approve before anything is done. Look into whatever you need to (read files, search, look things up), but change nothing: tools that write files, run code, act in apps or otherwise change things are refused. When you have a concrete plan (the steps, what each one touches, anything the user needs to decide), submit it with exit_plan_mode so they can approve it or ask for changes. If you have no such tool, reply with the plan and ask whether to go ahead.]"
     );
   }
   const goal = goalCommand(text);
   if (goal && 'goal' in goal) {
     notes.push(
-      `[/goal: The user set a goal for this chat: "${goal.goal}". Work toward it on your own, step by step, until it is fully achieved; don't stop to ask permission for steps the goal already covers. Once it is achieved, call goal_done with a short summary and tell the user the outcome. If it can't be achieved, or only the user can unblock it, call goal_done with achieved: false and explain why. Until goal_done is called, the app keeps the work going with automatic messages.]`
+      `[/goal: The user set a goal for this chat: "${goal.goal}". Work toward it on your own, step by step, until it is fully achieved; don't stop to ask permission for steps the goal already covers. When it is achieved, call goal_done with a short summary and tell the user the outcome. If it can't be achieved, or only the user can unblock it, call goal_done with achieved: false and explain why. Until goal_done is called, the app keeps the work going with automatic messages.]`
     );
   }
   // The command too, as written at the start of the message's own text.
   const command = /^\/(plan|goal)(?=\s|$)/i.exec(splitQuotes(text).text.trimStart())?.[0];
-  if (command && (isPlanRequest(text) || (goal && 'goal' in goal))) mentions.push(command);
+  if (command && (planning || (goal && 'goal' in goal))) mentions.push(command);
   return { context: notes.length ? notes.join('\n\n') : undefined, mentions };
 }
-
-/** The text of the message the app sends to keep a /goal going, and its note for the model. */
-export const GOAL_NUDGE = 'Continue working toward the goal.';
-
-export const goalNudgeContext = (goal: string) =>
-  `[Sent automatically by the app, not typed by the user: the goal set with /goal isn't marked done yet ("${goal}"). Carry on with the next step. Call goal_done once it is achieved, or with achieved: false if it can't be or you need the user.]`;

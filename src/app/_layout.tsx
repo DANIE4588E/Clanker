@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DialogHost } from '@/components/Dialogs';
+import { GoalSheetHost } from '@/components/GoalSheet';
 import { OverlayHost } from '@/components/OverlayHost';
 import { ReplyNotifications } from '@/components/ReplyNotifications';
 import { ScriptRuntime } from '@/components/ScriptRuntime';
@@ -116,6 +117,7 @@ export default function RootLayout() {
               <Stack.Screen name="oauth2redirect" options={{ headerShown: false, presentation: 'transparentModal', animation: 'none' }} />
             </Stack>
             <OverlayHost />
+            <GoalSheetHost />
             <DialogHost />
             <UpdateCheck />
             <ReplyNotifications />

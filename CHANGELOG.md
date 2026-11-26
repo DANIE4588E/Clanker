@@ -1,3 +1,22 @@
+# Unreleased
+
+## Plan mode, the way Claude Code does it
+- **/plan** now puts the chat in **plan mode** and keeps it there: replies research only (read, search, browse, ask you questions), anything that changes files, runs code, acts in apps or saves memories is refused, and a **Plan mode** chip above the box says so. `/plan <task>` starts planning that task; `/plan exit` or the chip's ✕ leaves.
+- When the model has a plan it submits it with a new **exit_plan_mode** tool, which shows the plan in a card with two buttons: **Accept plan** or **Keep planning** (with a box for what to change, or just type a message). Accepting ends plan mode and **turns the plan into a goal**, so the work starts and keeps going; asking for changes sends your feedback back and the model submits a revised plan.
+
+## Goals, developed
+- Goals show above the box as a chip with the turns used (`3/20`), an **edit** button, a **pause/resume** button and a ✕. Tap it for a goal sheet showing the goal, turns used, who set it and the approved plan behind it, where you can edit, pause, resume or clear it. `/goal pause`, `/goal resume` and `/goal clear` do the same, and `/goal` alone shows how it's going.
+- A goal **pauses itself** (and says why) when it reaches its limit of automatic turns, after replies with no tool calls in a row (the model is likely done or waiting on you), or when you stop a reply; your next message picks it back up. Set the **turn limit** in Settings → Tools.
+- **Models can manage goals themselves**: new tools to start, edit, delete and finish goals, each with its own switch in Settings → Tools → Goals. Goals started by a model, by a plan or by you are told apart.
+
+## Todo lists
+- A new **todo_write** tool lets models keep a checklist for longer tasks. It shows above the box as a `2/5` chip with the current step; tap it for the full list, with done items struck through. Models are told the list's state through context notes, so prompts still cache.
+
+## Under the hood
+- Plan mode, goals and todo lists are reported to the model in the per-step context note only when they change, and the system prompt only names the tools that are turned on.
+
+---
+
 # Clanker 1.3.0-beta.6
 
 ## Plugins: connect your apps and services

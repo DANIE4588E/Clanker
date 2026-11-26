@@ -1,14 +1,14 @@
 import { Directory, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
-import { useChats } from '@/store/chats';
 import { useMemory } from '@/store/memory';
 import { useSettings } from '@/store/settings';
 import { ClankerShell } from '../../../modules/clanker-shell';
 import { importAsset } from '../attachments';
 import { compress, contextStatus, decompress, searchContext } from '../context';
 import { describeJob, getJob, jobsOf, killJob, startJob, waitForJob } from '../jobs';
-import { changesThings, isPlanning, PLAN_REFUSAL } from '../commands';
+import { changesThings, PLAN_REFUSAL } from '../commands';
 import { memoryInPool, memoryOn, readChat, searchChats } from '../memory';
+import { isPlanning } from '../planning';
 import { pluginToolOn } from '../plugins/catalog';
 import { memoryPool, workspaceFor } from '../projects';
 import {
@@ -37,6 +37,7 @@ import type { ToolEntry } from './catalog';
 import { describeCall, lineChanges } from './describe';
 import { extractZipDocument, ZIP_DOCUMENT_EXT } from './documents';
 import { isMcpTool, mcpTools } from './mcp';
+import { PLAN_TOOLS } from './plan';
 import { PLUGIN_TOOLS } from './plugins';
 import { forgetObserved, isObserved, markObserved, requireObserved } from './observe';
 import { PHONE_TOOLS, phoneAvailable, phoneSupported } from './phone';
@@ -1140,33 +1141,6 @@ const skillManage: Tool = {
 const SKILL_TOOLS: Tool[] = [skillView, skillManage];
 
 const BACKGROUND_TOOLS = [runPython.name, runJavaScript.name, runShell.name];
-// ---- goals ---------------------------------------------------------------------------------
-
-const goalDone: Tool = {
-  name: 'goal_done',
-  description:
-    'Mark the goal the user set with /goal as finished, which stops the app from keeping the work going. Call it once the goal is fully achieved, or with achieved: false when it can’t be achieved or only the user can unblock it.',
-  parameters: {
-    type: 'object',
-    properties: {
-      summary: { type: 'string', description: 'What was done, in a sentence or two; or why it stopped.' },
-      achieved: { type: 'boolean', description: 'False when stopping without achieving the goal. Default true.' },
-    },
-    required: ['summary'],
-  },
-  async run(input, { conversationId }) {
-    const goal = useChats.getState().conversations[conversationId]?.goal;
-    if (!goal) throw new ToolError('No goal is set in this chat.');
-    useChats.getState().setGoal(conversationId, undefined);
-    return {
-      output:
-        input.achieved === false
-          ? `Stopped working toward the goal "${goal.text}". Tell the user why and what they can do.`
-          : `Goal "${goal.text}" marked achieved. Tell the user the outcome.`,
-    };
-  },
-};
-
 const MEMORY_TOOLS: Tool[] = [memorySave, memoryUpdate, memoryForget, searchChatsTool, readChatTool];
 
 const TOOLS: Tool[] = [
@@ -1191,7 +1165,7 @@ const TOOLS: Tool[] = [
   searchContextTool,
   contextStatusTool,
   ...MEMORY_TOOLS,
-  goalDone,
+  ...PLAN_TOOLS,
   ...SKILL_TOOLS,
   ...PHONE_TOOLS,
   ...PLUGIN_TOOLS,
@@ -1217,8 +1191,6 @@ function enabled(tool: Tool, conversationId?: string | null) {
   // Loading needs skills to load, unless the model may make them; making them needs the setting.
   if (tool === skillView) return skillsLearn() || enabledSkills().length > 0;
   if (tool === skillManage) return skillsLearn();
-  // Only while the chat has a /goal to finish.
-  if (tool === goalDone) return !!conversationId && !!useChats.getState().conversations[conversationId]?.goal;
   return true;
 }
 

@@ -13,6 +13,25 @@ export const LOCAL_TOOL_GROUPS: ToolGroup[] = [
     tools: [{ names: ['ask_user'], title: 'Ask you questions', detail: 'Clarify what you mean before going on' }],
   },
   {
+    title: 'Plans & todo lists',
+    footer: 'Plan mode (/plan) has models research first and submit a plan for you to accept or refine. Accepting turns the plan into a goal.',
+    tools: [
+      { names: ['exit_plan_mode'], title: 'Submit plans', detail: 'In plan mode, propose a plan for your approval' },
+      { names: ['todo_write'], title: 'Todo lists', detail: 'Track the steps of a longer task in a checklist you can see' },
+    ],
+  },
+  {
+    title: 'Goals',
+    footer:
+      'A goal keeps a reply going, turn after turn, until the work is done. You set one with /goal; these let models manage goals themselves. Without Finish goals, goals can’t keep the work going.',
+    tools: [
+      { names: ['goal_start'], title: 'Start goals', detail: 'Take on a big task as a goal and keep going until it is done' },
+      { names: ['goal_edit'], title: 'Edit goals', detail: 'Reword the current goal as the work changes' },
+      { names: ['goal_delete'], title: 'Delete goals', detail: 'Drop a goal that no longer applies' },
+      { names: ['goal_done'], title: 'Finish goals', detail: 'Mark a goal achieved, or stop when it can’t be' },
+    ],
+  },
+  {
     title: 'Files',
     footer: "Models only see files in Clanker's private workspace.",
     tools: [

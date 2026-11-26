@@ -8,6 +8,8 @@ import type { ToolPart } from '@/lib/providers';
 import { fonts, useTheme } from '@/lib/theme';
 import { describeCall, lineChanges } from '@/lib/tools';
 import { questionsOf } from '@/lib/tools/ask';
+import { todosOf } from '@/lib/tools/plan';
+import { todoText } from '@/lib/planning';
 import type { Workspace } from '@/lib/workspace';
 import { useWorkspace } from '@/lib/useWorkspace';
 import { CodeBlock } from './CodeBlock';
@@ -35,6 +37,12 @@ const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   decompress: 'maximize-2',
   search_context: 'search',
   context_status: 'bar-chart-2',
+  exit_plan_mode: 'map',
+  todo_write: 'check-square',
+  goal_start: 'target',
+  goal_edit: 'target',
+  goal_delete: 'target',
+  goal_done: 'flag',
 };
 
 export const toolIcon = (name: string): keyof typeof Feather.glyphMap =>
@@ -97,6 +105,15 @@ function CallInput({ part }: { part: ToolPart }) {
         {text}
       </Text>
     );
+  }
+  if (part.name === 'todo_write') {
+    // The output only says how many are done; the list itself is what the call carried.
+    const list = todoText(todosOf(input));
+    return list ? (
+      <Text selectable={selectable} style={[styles.mono, { color: colors.textSecondary }]}>
+        {list}
+      </Text>
+    ) : null;
   }
   if ((part.name === 'run_python' || part.name === 'run_javascript') && typeof input.code === 'string') {
     return <CodeBlock code={input.code} language={part.name === 'run_python' ? 'python' : 'javascript'} live={live} />;

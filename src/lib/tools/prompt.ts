@@ -1,9 +1,10 @@
 import { Platform } from 'react-native';
-import { useChats } from '@/store/chats';
+import { useChats, type Goal } from '@/store/chats';
 import { useSettings } from '@/store/settings';
 import { compressedKeys, formatTokens, historyOf, historyTokens, unitsOf } from '../context';
 import { describeJob, jobsOf } from '../jobs';
 import { currentMemories, memoriesFor, memoryDiff, memoryOn, memorySection } from '../memory';
+import { PLAN_RULES, todoText } from '../planning';
 import { projectSection, workspaceFor } from '../projects';
 import { skillsDiff, skillsFor, skillsSection } from '../skills';
 import { formatSize } from '../workspace';
@@ -38,6 +39,12 @@ export function agentSystemPrompt() {
   const context = has('compress', 'decompress', 'search_context', 'context_status');
   const phone = has('phone_screen');
   const ask = has('ask_user');
+  const planning = has('exit_plan_mode');
+  const todos = has('todo_write');
+  const goalStart = has('goal_start');
+  const goalEdit = has('goal_edit');
+  const goalDelete = has('goal_delete');
+  const goalDone = has('goal_done');
   // Installed plugins with at least one tool offered, and whether any of their tools write.
   const apps = PLUGINS.filter((p) => pluginTools(p).some((t) => on(t.name)));
   const appNames = apps.map((p) => p.title);
@@ -137,6 +144,24 @@ export function agentSystemPrompt() {
     '- Put everything you need to know in one call. Offer a few short options when the likely answers are few, with the one you recommend first; the user can always answer in their own words.'
   );
 
+  const planSection = lines(
+    '# Planning and tracking work',
+    planning &&
+      '- The user can put a chat into plan mode (/plan). While it is on, the context note says so and gives the rules: research only, then submit the plan with exit_plan_mode and let the user approve it. When they approve, the plan becomes the goal and you carry it out.',
+    todos &&
+      '- For work with three or more steps, or several things asked at once, keep a todo list with todo_write: write it before you start, keep one item in_progress, and mark items completed as you finish them. Skip it for quick, single-step requests. The user sees the list live; the context note shows its current state.',
+    goalDone &&
+      '- A goal keeps the work going: while one is set (by the user with /goal, from an approved plan' +
+        (goalStart ? ', or by you' : '') +
+        '), the app sends automatic messages after each of your replies until you call goal_done. Work toward it on your own without stopping to ask for steps it already covers, and check the result before you finish it. If you cannot go on or need the user, say so with goal_done (achieved: false) or ask them' +
+        (ask ? ' with ask_user' : '') +
+        '.',
+    goalStart &&
+      '- Start a goal yourself with goal_start only for substantial work that needs many steps and sustained effort, typically when the user asks you to keep going until something is done. Do not start goals for questions, small tasks or ordinary conversation.',
+    (goalEdit || goalDelete) &&
+      `- ${[goalEdit && 'goal_edit rewords the current goal when the work changes shape', goalDelete && 'goal_delete drops it when the user no longer wants it'].filter(Boolean).join('; ')}.`
+  );
+
   const runList = runTools.length > 1 ? `${runTools.slice(0, -1).join(', ')} or ${runTools[runTools.length - 1]}` : runTools[0];
   const jobsSection = lines(
     '# Background jobs',
@@ -178,6 +203,7 @@ export function agentSystemPrompt() {
       }`
     ),
     ask && askSection,
+    (planning || todos || goalDone || goalStart) && planSection,
     local && files,
     web && webSection,
     phone && phoneSection,
@@ -228,6 +254,16 @@ export function systemPrompt(conversationId: string | null, withTools: boolean) 
   return parts.length ? parts.join('\n\n') : undefined;
 }
 
+const GOAL_BY = { user: 'the user', agent: 'you', plan: 'the approved plan' } as const;
+
+/** The goal as the context note tells the model, without the turn count, so the line only changes with the goal. */
+function goalLine(goal: Goal) {
+  const by = GOAL_BY[goal.by ?? 'user'];
+  return goal.paused
+    ? `Goal (from ${by}): "${goal.text}". It is paused (${goal.paused.reason}): don't keep working toward it on your own until the user resumes it or sends a message about it.`
+    : `Goal (from ${by}): "${goal.text}". Keep working toward it on your own until it is achieved, then call goal_done.`;
+}
+
 /**
  * Writes the context note for the latest history unit, replacing any it had (a regenerated reply
  * starts over from the same user message). Called once per model response, before the request.
@@ -269,6 +305,18 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
     .findLast((s) => s != null);
   const skillsNew = skills != null && skills !== (skillsShown ?? '');
 
+  // Plan mode, the goal and the todo list likewise show when they changed since a note that still reaches the model.
+  const state = {
+    plan: conversation.plan ? PLAN_RULES : '',
+    goal: conversation.goal ? goalLine(conversation.goal) : '',
+    todos: conversation.todos?.length ? todoText(conversation.todos) : '',
+  };
+  const stateNew = (key: keyof typeof state) =>
+    state[key] !== (earlier.map((u) => notes[u.key]?.[key]).findLast((v) => v != null) ?? '');
+  const planNew = stateNew('plan');
+  const goalNew = stateNew('goal');
+  const todosNew = stateNew('todos');
+
   const lines = [
     '<context>',
     `Current time: ${new Date().toString()}`,
@@ -290,6 +338,11 @@ ${skills}`
             : 'The skills are back to how they were when this chat began.',
         ]
       : []),
+    ...(planNew ? [state.plan || 'Plan mode is now off: every tool works again.'] : []),
+    ...(goalNew ? [state.goal || 'No goal is set now.'] : []),
+    ...(todosNew
+      ? [state.todos ? `Your todo list now (replaces any earlier one):\n${state.todos}` : 'Your todo list is now empty.']
+      : []),
     '</context>',
   ];
   useChats.getState().setNote(opts.conversationId, last.key, {
@@ -297,5 +350,8 @@ ${skills}`
     ...(workspace !== shown ? { workspace } : {}),
     ...(memoryNew ? { memory } : {}),
     ...(skillsNew ? { skills } : {}),
+    ...(planNew ? { plan: state.plan } : {}),
+    ...(goalNew ? { goal: state.goal } : {}),
+    ...(todosNew ? { todos: state.todos } : {}),
   });
 }

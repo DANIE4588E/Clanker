@@ -6,9 +6,10 @@ import { ActivityIndicator, Alert, Dimensions, Keyboard, Pressable, ScrollView, 
 import Animated, { Easing, interpolate, useAnimatedStyle, withTiming, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AttachmentMenu, type AttachAction } from '@/components/AttachmentMenu';
+import { showGoalDetails } from '@/components/GoalSheet';
 import { MentionMenu } from '@/components/MentionMenu';
 import { attachmentUri, deleteAttachment, pickFiles, pickImages } from '@/lib/attachments';
-import { goalClear } from '@/lib/commands';
+import { goalCommand } from '@/lib/commands';
 import { attachmentFor, type LibraryItem } from '@/lib/library';
 import {
   atSections,
@@ -353,10 +354,19 @@ export function Composer({
 
   const send = () => {
     if (!canSend) return;
-    // "/goal" alone clears the chat's goal; with none to clear, it needs saying what to work toward.
-    if (!remote && goalClear(text) && !(conversationId && useChats.getState().conversations[conversationId]?.goal)) {
-      Alert.alert('What’s the goal?', 'Write what to work toward after /goal, like “/goal Get every test passing”.');
-      return;
+    // "/goal" alone shows how the goal is doing, and "/goal clear", "pause" and "resume" manage it;
+    // with no goal to manage, it needs saying what to work toward.
+    const goalCmd = remote ? null : goalCommand(text);
+    if (goalCmd && !('goal' in goalCmd)) {
+      if (!(conversationId && useChats.getState().conversations[conversationId]?.goal)) {
+        Alert.alert('What’s the goal?', 'Write what to work toward after /goal, like “/goal Get every test passing”.');
+        return;
+      }
+      if ('status' in goalCmd && conversationId) {
+        showGoalDetails(conversationId);
+        onChangeText('');
+        return;
+      }
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Cleared first, so an owner that fills the box again on send (ending an edit) keeps what it puts back.

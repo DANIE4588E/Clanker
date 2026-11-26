@@ -5,8 +5,9 @@ import { useUI } from '@/store/ui';
 import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
 import { autoCompress, buildWire, historyOf, historyTokens, unitsOf } from './context';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
-import { goalClear, goalCommand, isPlanRequest, setPlanning } from './commands';
-import { GOAL_NUDGE, goalNudgeContext, resolveMentions } from './mentions';
+import { goalCommand, goalControl, planCommand, planControl, type GoalCommand } from './commands';
+import { resolveMentions } from './mentions';
+import { clearGoal, GOAL_IDLE_LIMIT, GOAL_NUDGE, goalActive, goalMaxTurns, goalNudgeContext, isPlanning, pauseGoal, resumeGoal, startGoal } from './planning';
 import { askToNotify, notifyReplyFinished } from './notifications';
 import { workspaceFor, workspaceOf } from './projects';
 import { parsePartialJson } from './partialJson';
@@ -30,6 +31,7 @@ import { recordStep, stepStats } from './stats';
 import { apiKeys, flushJsonStorage, uid } from './storage';
 import { availableTools, executeTool, toolOn } from './tools';
 import { answerInWords } from './tools/ask';
+import { answerPlanInWords, cancelWaitingPlan } from './tools/plan';
 import { endPhoneRun, onPhoneStop } from './tools/phone';
 import { markObserved } from './tools/observe';
 import { isRemoteChat, remoteEffortForChat, sendRemoteMessage, sendRemoteQueue, stopRemoteChat } from './remote/chat';
@@ -57,9 +59,6 @@ function withAnswerNow(messages: WireMessage[]): WireMessage[] {
   if (last?.role === 'user') return [...rest, { ...last, text: `${last.text}\n\n${ANSWER_NOW}` }];
   return [...messages, { role: 'user', text: ANSWER_NOW, images: [] }];
 }
-
-// Turns in a row the app sends on its own to keep a /goal going, before it waits for the user.
-const GOAL_MAX_TURNS = 20;
 
 // Batch tokens so the store (and the markdown re-render) updates at most ~25 times a second.
 const FLUSH_MS = 40;
@@ -109,20 +108,37 @@ function postUserMessage(id: string, text: string, attachments: AttachmentPart[]
     parts.flatMap((p) => (p.type === 'file' && p.path && p.text != null && !p.file ? [p.path] : []))
   );
 
-  // /goal sets the chat's goal; anything the user sends starts the count of automatic turns over.
+  // /goal and /plan change the chat's mode as they are sent; anything else the user sends starts
+  // the count of automatic turns over and picks up a goal the app paused.
   const chats = useChats.getState();
-  const command = goalCommand(text);
-  const goal = chats.conversations[id]?.goal;
-  if (command && 'goal' in command) chats.setGoal(id, { text: command.goal, setAt: Date.now(), turns: 0 });
-  else if (command) chats.setGoal(id, undefined);
-  else if (!auto && goal?.turns) chats.setGoal(id, { ...goal, turns: 0 });
+  const goalCmd = goalCommand(text);
+  const planCmd = planCommand(text);
+  if (goalCmd) {
+    applyGoalCommand(id, goalCmd);
+    // Setting a goal means getting on with it, which plan mode would refuse.
+    if ('goal' in goalCmd) leavePlanMode(id);
+  } else if (!auto) {
+    const goal = chats.conversations[id]?.goal;
+    if (goal && (goal.turns || goal.idle || (goal.paused && !goal.paused.manual))) {
+      const { idle: _, ...rest } = goal;
+      chats.setGoal(id, goal.paused?.manual ? { ...goal, turns: 0, idle: 0 } : { ...rest, turns: 0, paused: undefined });
+    }
+  }
+  if (planCmd) {
+    if ('exit' in planCmd) leavePlanMode(id);
+    else enterPlanMode(id);
+  }
+  const goal = useChats.getState().conversations[id]?.goal;
 
   // What the message's @mentions and /commands point at, worked out now (after attachments are
   // saved, so they resolve too) and kept with it: the note for the model, the mentions to color.
   let resolved: { context?: string; mentions: string[] } = { mentions: [] };
   try {
     const attached = parts.flatMap((p) => (p.type === 'file' ? [p.name] : []));
-    resolved = auto === 'goal' ? { context: goalNudgeContext(goal?.text ?? ''), mentions: [] } : resolveMentions(id, text, attached);
+    resolved =
+      auto === 'goal' && goal
+        ? { context: goalNudgeContext(goal, useChats.getState().conversations[id]?.todos, goalMaxTurns()), mentions: [] }
+        : resolveMentions(id, text, attached);
   } catch {
     // The message goes as typed.
   }
@@ -141,6 +157,25 @@ function postUserMessage(id: string, text: string, attachments: AttachmentPart[]
   };
   if (replacing) useChats.getState().branch(id, replacing, message);
   else useChats.getState().addMessage(id, message);
+}
+
+/** Does what /goal asked for: set the goal, end it, pause or resume it. Its status is shown by the composer. */
+function applyGoalCommand(id: string, command: GoalCommand) {
+  if ('goal' in command) startGoal(id, command.goal, 'user');
+  else if ('clear' in command) clearGoal(id);
+  else if ('pause' in command) pauseGoal(id, 'You paused it.', true);
+  else if ('resume' in command) resumeGoal(id);
+}
+
+/** Puts the chat in plan mode: replies research and propose a plan, and nothing changes until it is approved. */
+export function enterPlanMode(id: string) {
+  if (!useChats.getState().conversations[id]?.plan) useChats.getState().setPlan(id, { startedAt: Date.now() });
+}
+
+/** Takes the chat out of plan mode; a plan waiting for approval goes unanswered. */
+export function leavePlanMode(id: string) {
+  if (useChats.getState().conversations[id]?.plan) useChats.getState().setPlan(id, undefined);
+  cancelWaitingPlan(id);
 }
 
 /** Starts a new conversation (when `conversationId` is null) or continues one, and streams the reply. */
@@ -333,16 +368,33 @@ export function submitMessage(conversationId: string | null, text: string, attac
     useChats.getState().setQueue(conversationId, [...(chat.queue ?? []), { id: uid(), text, attachments, remoteEffort: remoteEffortForChat(conversationId) }]);
     return conversationId;
   }
-  // "/goal" on its own (or "/goal clear") clears the chat's goal at once, even mid-reply, and sends
-  // nothing. (The composer explains /goal instead when there is no goal to clear.)
-  if (conversationId && !attachments.length && goalClear(text)) {
-    useChats.getState().setGoal(conversationId, undefined);
-    return conversationId;
+  // "/goal clear", "/goal pause" and the like, and "/plan" on its own or "/plan exit", act at once,
+  // even mid-reply, and send nothing. (The composer explains /goal itself when there is no goal.)
+  if (!attachments.length) {
+    const goalCmd = goalCommand(text);
+    if (goalCmd && goalControl(text) && conversationId) {
+      applyGoalCommand(conversationId, goalCmd);
+      return conversationId;
+    }
+    const planCmd = planCommand(text);
+    if (planCmd && planControl(text)) {
+      const { active } = useSettings.getState();
+      // Plan mode on a chat yet to start needs the chat, so an empty one is made for it.
+      const id = conversationId ?? (active && 'start' in planCmd ? useChats.getState().create(active.endpointId, active.model) : null);
+      if (id) {
+        if ('start' in planCmd) enterPlanMode(id);
+        else leavePlanMode(id);
+        return id;
+      }
+    }
   }
   if (!conversationId || !controllers.has(conversationId)) return sendMessage(conversationId, text, attachments);
-  // While the model waits on a question, a message answers it. Attachments can't go in the answer,
-  // so they follow it into the reply at the next step.
-  if (answerInWords(conversationId, text || '(No text; files the user attached follow.)')) {
+  // While the model waits on a question or on a decision about its plan, a message answers it.
+  // Attachments can't go in the answer, so they follow it into the reply at the next step.
+  if (
+    answerInWords(conversationId, text || '(No text; files the user attached follow.)') ||
+    answerPlanInWords(conversationId, text || '(No text; files the user attached follow.)')
+  ) {
     if (attachments.length) {
       useChats.getState().setQueue(conversationId, [...queueOf(conversationId), { id: uid(), text: '', attachments, steer: true }]);
     }
@@ -537,9 +589,9 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
     });
   };
 
-  // A reply to /plan may only look into the task; tools that change things are refused (see executeTool).
-  const asked = historyOf(useChats.getState().conversations[id]!, replyId).findLast((m) => m.role === 'user');
-  setPlanning(id, !!asked && isPlanRequest(messageText(asked)));
+  // In plan mode a reply may only look into the task, and tools that change things are refused (see
+  // executeTool). Without tools there is no way to submit a plan, so the chat leaves plan mode.
+  if (conversation.plan && !(tools && toolOn('exit_plan_mode', id))) leavePlanMode(id);
 
   let apiKey: string | undefined;
   let interrupted: string | undefined;
@@ -735,7 +787,6 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
     if (timer) clearTimeout(timer);
     controllers.delete(id);
     wrapUps.delete(id);
-    setPlanning(id, false);
     endPhoneRun(id, controller.signal.aborted);
     // Steers that never reached a step boundary wait in the queue like any other message.
     const queue = queueOf(id);
@@ -770,19 +821,37 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
       // No model to send with; the message stays queued.
     }
   }
-  // With nothing queued, a /goal not yet marked done keeps the work going; not after "Answer now",
+  // A goal the user stopped mid-reply waits for them rather than starting again on its own.
+  if (controller.signal.aborted) pauseGoal(id, 'You stopped the reply.');
+  // With nothing queued, a goal not yet marked done keeps the work going; not after "Answer now",
   // which asks for the work to stop. goal_done is looked up now rather than among the reply's
   // tools, since a goal set by steering arrives after those were picked.
-  if (!stopped && !wrapUp && !controllers.has(id) && toolsOn && toolOn('goal_done', id)) keepGoalGoing(id);
+  if (!stopped && !wrapUp && !controllers.has(id) && toolsOn && toolOn('goal_done', id)) keepGoalGoing(id, calls.length > 0);
   // Unless a queued message went out as the next turn (or the user stopped it manually), notify.
   if (!controller.signal.aborted && !controllers.has(id)) void notifyReplyFinished(id, replyId);
 }
 
-/** Sends the next turn toward the chat's /goal for the user, up to GOAL_MAX_TURNS in a row. */
-function keepGoalGoing(id: string) {
-  const goal = useChats.getState().conversations[id]?.goal;
-  if (!goal || goal.turns >= GOAL_MAX_TURNS) return;
-  useChats.getState().setGoal(id, { ...goal, turns: goal.turns + 1 });
+/**
+ * Sends the next turn toward the chat's goal for the user. It pauses the goal instead when the
+ * limit of automatic turns in a row is reached, or after replies without a single tool call: the
+ * model is then likely done or waiting for the user, and another nudge would only repeat itself.
+ */
+function keepGoalGoing(id: string, worked: boolean) {
+  const chats = useChats.getState();
+  const goal = chats.conversations[id]?.goal;
+  // Plan mode holds a goal still: the plan, once approved, takes its place.
+  if (!goalActive(goal) || isPlanning(id)) return;
+  const idle = worked ? 0 : (goal.idle ?? 0) + 1;
+  if (idle >= GOAL_IDLE_LIMIT) {
+    chats.setGoal(id, { ...goal, idle, paused: { reason: 'The model stopped making progress and may be waiting for you. Reply to carry on.' } });
+    return;
+  }
+  const max = goalMaxTurns();
+  if (goal.turns >= max) {
+    chats.setGoal(id, { ...goal, idle, paused: { reason: `It used its ${max} automatic turns in a row. Reply or resume to carry on.` } });
+    return;
+  }
+  chats.setGoal(id, { ...goal, turns: goal.turns + 1, idle });
   try {
     sendMessage(id, GOAL_NUDGE, [], 'goal');
   } catch {

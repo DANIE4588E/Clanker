@@ -22,6 +22,7 @@ import { useSubscriptionQuota } from '@/lib/useSubscriptionQuota';
 import { Composer, composerGrowth } from './Composer';
 import { EdgeFade } from './EdgeFade';
 import { EffortSlider } from './EffortSlider';
+import { ChatStatus } from './ChatStatus';
 import { QueuedMessages } from './QueuedMessages';
 
 // Effort panel backdrop: a solid wash of background from just above the label down to the
@@ -115,8 +116,11 @@ export function ComposerDock({
     const messages = conversationId ? s.conversations[conversationId]?.messages : undefined;
     return !!messages?.[messages.length - 1]?.content.some((p) => p.type === 'tool' && p.name === 'ask_user' && p.status === 'running');
   });
-  // What the chat is working toward with /goal, shown above the box until it's done or cleared.
-  const goal = useChats((s) => (conversationId ? s.conversations[conversationId]?.goal?.text : undefined));
+  // Likewise a plan waiting for approval: a message sent then is feedback on it.
+  const reviewing = useChats((s) => {
+    const messages = conversationId ? s.conversations[conversationId]?.messages : undefined;
+    return !!messages?.[messages.length - 1]?.content.some((p) => p.type === 'tool' && p.name === 'exit_plan_mode' && p.status === 'running');
+  });
   const selectedBackend = useBackends((s) => s.selected);
   const backendId = useChats((s) => conversationId ? s.conversations[conversationId]?.backendId ?? 'local' : selectedBackend);
   const remote = backendId !== 'local';
@@ -258,22 +262,7 @@ export function ComposerDock({
               allowSteer={!remote}
             />
           ) : null}
-          {!!goal && conversationId && !editing && (
-            <View style={[styles.editing, styles.goal, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Feather name="target" size={14} color={colors.textSecondary} />
-              <Text numberOfLines={1} style={[styles.editingText, styles.goalText, { color: colors.textSecondary }]}>
-                Goal: {goal}
-              </Text>
-              <Pressable
-                onPress={() => useChats.getState().setGoal(conversationId, undefined)}
-                hitSlop={10}
-                accessibilityLabel="Clear goal"
-                style={styles.editingClose}
-              >
-                <Feather name="x" size={16} color={colors.textSecondary} />
-              </Pressable>
-            </View>
-          )}
+          {!!conversationId && !editing && !remote && <ChatStatus conversationId={conversationId} progress={progress} />}
           {editing && (
             <View style={[styles.editing, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Feather name="edit-2" size={14} color={colors.textSecondary} />
@@ -291,7 +280,7 @@ export function ComposerDock({
             attachments={attachments}
             onChangeAttachments={setAttachments}
             placeholder={
-              editing ? 'Edit message' : asking ? 'Answer the question' : streaming ? (followUp === 'steer' ? 'Steer the reply' : 'Queue a follow-up') : 'Ask anything'
+              editing ? 'Edit message' : asking ? 'Answer the question' : reviewing ? 'Give feedback on the plan' : streaming ? (followUp === 'steer' ? 'Steer the reply' : 'Queue a follow-up') : 'Ask anything'
             }
             inputRef={input}
             streaming={streaming}
@@ -375,7 +364,5 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   editingText: { fontSize: 13 },
-  goal: { maxWidth: '88%' },
-  goalText: { flexShrink: 1 },
   editingClose: { padding: 2 },
 });

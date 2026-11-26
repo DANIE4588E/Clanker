@@ -2,10 +2,10 @@ import Feather from '@expo/vector-icons/Feather';
 import { router } from 'expo-router';
 import type { DrawerContentComponentProps } from 'expo-router/drawer';
 import { useMemo, useState } from 'react';
-import { Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/lib/theme';
-import { messageText, useChatList, type Conversation } from '@/store/chats';
+import { isWorking, messageText, useChatList, type Conversation } from '@/store/chats';
 import { useProjects, type Project } from '@/store/projects';
 import { useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
@@ -179,23 +179,30 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
           }
           const c = item.chat;
           const project = c.projectId ? projects[c.projectId] : undefined;
+          const working = isWorking(c);
           return (
             <Pressable
               onPress={() => select(c.id)}
               onLongPress={(e) => showChatMenu(c, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
               style={({ pressed }) => [
                 styles.item,
+                styles.chatRow,
                 (c.id === currentId || pressed) && { backgroundColor: colors.surfaceHover },
               ]}
             >
-              <Text numberOfLines={1} style={[styles.itemText, { color: colors.text }]}>
-                {c.title}
-              </Text>
-              {project && (
-                <Text numberOfLines={1} style={[styles.itemProject, { color: colors.textTertiary }]}>
-                  {project.name}
-                </Text>
+              {working && (
+                <ActivityIndicator size="small" color={colors.textSecondary} accessibilityLabel="Working" />
               )}
+              <View style={styles.grow}>
+                <Text numberOfLines={1} style={[styles.itemText, { color: colors.text }]}>
+                  {c.title}
+                </Text>
+                {project && (
+                  <Text numberOfLines={1} style={[styles.itemProject, { color: colors.textTertiary }]}>
+                    {project.name}
+                  </Text>
+                )}
+              </View>
             </Pressable>
           );
         }}
@@ -236,6 +243,7 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 16, paddingVertical: 9 },
   newChatIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  chatRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   section: { fontSize: 13, fontWeight: '600', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6 },
   item: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 11, borderRadius: 10 },
   itemText: { fontSize: 16 },

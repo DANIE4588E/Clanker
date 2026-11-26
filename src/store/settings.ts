@@ -51,6 +51,8 @@ interface SettingsState {
   disabledTools: string[];
   /** Rounds of tool calls a reply may make before it is stopped, or null for no limit. */
   maxSteps: number | null;
+  /** Turns in a row the app sends by itself to keep a goal going before it waits for the user. */
+  goalMaxTurns: number;
   /** Whether the composer shows a context usage meter while typing. */
   contextUsage: boolean;
   /** Whether replies show the model's decode speed over the chat's last 10 responses. */
@@ -96,6 +98,7 @@ interface SettingsState {
   setTools: (on: boolean) => void;
   setToolsEnabled: (names: string[], on: boolean) => void;
   setMaxSteps: (steps: number | null) => void;
+  setGoalMaxTurns: (turns: number) => void;
   setContextUsage: (on: boolean) => void;
   setDecodeSpeed: (on: boolean) => void;
   setCacheHits: (on: boolean) => void;
@@ -129,6 +132,7 @@ export const useSettings = create<SettingsState>()(
       tools: true,
       disabledTools: [],
       maxSteps: null,
+      goalMaxTurns: 20,
       contextUsage: false,
       decodeSpeed: false,
       cacheHits: false,
@@ -192,6 +196,7 @@ export const useSettings = create<SettingsState>()(
         set({ disabledTools: on ? rest : [...rest, ...names] });
       },
       setMaxSteps: (maxSteps) => set({ maxSteps }),
+      setGoalMaxTurns: (goalMaxTurns) => set({ goalMaxTurns }),
       setContextUsage: (contextUsage) => set({ contextUsage }),
       setDecodeSpeed: (decodeSpeed) => set({ decodeSpeed }),
       setCacheHits: (cacheHits) => set({ cacheHits }),

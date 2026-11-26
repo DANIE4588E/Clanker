@@ -40,7 +40,7 @@ export interface Message {
   stats?: ReplyStats;
   /** Set on the first message of each version of a fork: the key of the fork in `forks`. */
   fork?: string;
-  /** A user message the app sent on the user's behalf: 'goal' keeps a /goal going (see lib/chat). */
+  /** A user message the app sent on the user's behalf: 'goal' keeps a goal going (see lib/chat). */
   auto?: 'goal';
 }
 
@@ -91,6 +91,10 @@ export interface ContextNote {
   memory?: string;
   /** Skill changes since the chat began, when the note shows them (only when they changed). */
   skills?: string;
+  /** Plan mode's rules, goal and todo list as the note showed them (empty: none); shown only when they changed. */
+  plan?: string;
+  goal?: string;
+  todos?: string;
 }
 
 /** A message the user sent while a reply was running, waiting to go out. */
@@ -148,16 +152,43 @@ export interface Conversation {
   branchedFrom?: string;
   /** The versions hidden behind each fork in the chat (see Fork), by key. */
   forks?: Record<string, Fork>;
-  /** What the user set the chat working toward with /goal, until the model marks it done. */
+  /** What the chat is working toward, until the model marks it done or it is cleared. */
   goal?: Goal;
+  /** Set while the chat is in plan mode: replies only look into the task, then propose a plan. */
+  plan?: PlanMode;
+  /** The agent's todo list for the task in hand (see the todo_write tool). */
+  todos?: Todo[];
 }
 
-/** A /goal: replies keep going on their own until the model calls goal_done (see lib/chat). */
+/** A goal: replies keep going on their own until the model calls goal_done (see lib/chat). */
 export interface Goal {
   text: string;
   setAt: number;
   /** Turns the app has sent in a row to keep it going; a message from the user starts the count over. */
   turns: number;
+  /**
+   * Set while the goal waits for the user instead of being kept going. `manual` means the user
+   * paused it, so only they resume it; otherwise their next message does.
+   */
+  paused?: { reason: string; manual?: boolean };
+  /** Who set it: the user with /goal, the model with goal_start, or the approval of a plan. */
+  by?: 'user' | 'agent' | 'plan';
+  /** The approved plan the goal carries out, in Markdown. */
+  plan?: string;
+  /** Turns in a row that ended without a single tool call, which hints the model is stuck or waiting. */
+  idle?: number;
+}
+
+/** Plan mode (see lib/chat and lib/tools/planning): the chat researches and proposes before anything changes. */
+export interface PlanMode {
+  startedAt: number;
+}
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface Todo {
+  content: string;
+  status: TodoStatus;
 }
 
 interface ChatsState {
@@ -195,8 +226,12 @@ interface ChatsState {
   setQueue: (id: string, queue: QueuedMessage[]) => void;
   setMemoryBase: (id: string, memories: Memory[]) => void;
   setSkillBase: (id: string, skills: SkillRef[]) => void;
-  /** Sets the chat's /goal, or with undefined, clears it. */
+  /** Sets the chat's goal, or with undefined, clears it. */
   setGoal: (id: string, goal: Goal | undefined) => void;
+  /** Puts the chat in plan mode, or with undefined, takes it out. */
+  setPlan: (id: string, plan: PlanMode | undefined) => void;
+  /** Replaces the chat's todo list; undefined or an empty list clears it. */
+  setTodos: (id: string, todos: Todo[] | undefined) => void;
   /** Records file signatures as seen by the model; null forgets a path. */
   observe: (id: string, entries: Record<string, string | null>) => void;
   /** Removes the message with `messageId` and everything after it. */
@@ -372,6 +407,8 @@ export const useChats = create<ChatsState>()(
         setMemoryBase: (id, memoryBase) => patchConversation(id, () => ({ memoryBase })),
         setSkillBase: (id, skillBase) => patchConversation(id, () => ({ skillBase })),
         setGoal: (id, goal) => patchConversation(id, () => ({ goal })),
+        setPlan: (id, plan) => patchConversation(id, () => ({ plan })),
+        setTodos: (id, todos) => patchConversation(id, () => ({ todos: todos?.length ? todos : undefined })),
         observe: (id, entries) =>
           patchConversation(id, (c) => {
             const observed = { ...c.observed };
@@ -481,9 +518,15 @@ export function messageText(message: Pick<Message, 'content'>) {
   return message.content.map((p) => (p.type === 'text' ? p.text : '')).join('');
 }
 
+/** Whether a reply is being written in the chat. Only its last message can be (a steered reply ends before the next starts). */
+export function isWorking(c: Pick<Conversation, 'messages'>) {
+  return c.messages[c.messages.length - 1]?.status === 'streaming';
+}
+
 /**
  * Every conversation, for lists of chats. It changes when a chat comes or goes or what lists show
- * of it does (title, times, pins, project, message count), not with every token a reply streams.
+ * of it does (title, times, pins, project, message count, whether it's working), not with every
+ * token a reply streams.
  */
 export function useChatList(): Record<string, Conversation> {
   const signature = useChats(
@@ -496,6 +539,7 @@ export function useChatList(): Record<string, Conversation> {
         c.archivedAt,
         c.projectId,
         c.messages.length,
+        isWorking(c),
       ])
     )
   );

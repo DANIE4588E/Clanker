@@ -194,7 +194,7 @@ test('cuts text into plain runs and mentions', () => {
 });
 
 test('adds the /plan and /goal instructions', () => {
-  assert.match(mentions.resolveMentions('current', '/plan rename the files').context, /^\[\/plan: Plan this before doing it/);
+  assert.match(mentions.resolveMentions('current', '/plan rename the files').context, /^\[\/plan: Plan mode is on for this chat/);
   assert.match(mentions.resolveMentions('current', '/goal Get every test passing').context, /The user set a goal for this chat: "Get every test passing"/);
 });
 
@@ -203,9 +203,16 @@ test('adds the /plan and /goal instructions', () => {
 test('reads /goal', () => {
   assert.deepEqual(commands.goalCommand('/goal Ship v2'), { goal: 'Ship v2' });
   assert.deepEqual(commands.goalCommand('/GOAL  Ship v2 '), { goal: 'Ship v2' });
-  assert.deepEqual(commands.goalCommand('/goal'), { clear: true });
+  assert.deepEqual(commands.goalCommand('/goal'), { status: true });
   assert.deepEqual(commands.goalCommand('/goal clear'), { clear: true });
   assert.deepEqual(commands.goalCommand('/goal Stop'), { clear: true });
+  assert.deepEqual(commands.goalCommand('/goal pause'), { pause: true });
+  assert.deepEqual(commands.goalCommand('/goal Resume'), { resume: true });
+  // Only the bare word counts; a goal that happens to start with one is still a goal.
+  assert.deepEqual(commands.goalCommand('/goal pause the music when I leave'), { goal: 'pause the music when I leave' });
+  assert.equal(commands.goalControl('/goal clear'), true);
+  assert.equal(commands.goalControl('/goal'), true);
+  assert.equal(commands.goalControl('/goal ship it'), false);
   assert.equal(commands.goalCommand('/goals are nice'), null);
   assert.equal(commands.goalCommand('my /goal x'), null);
   // Quotes picked from the chat go ahead of the text.
@@ -219,11 +226,26 @@ test('reads /plan', () => {
   assert.equal(commands.isPlanRequest('make a /plan'), false);
 });
 
+test('reads /plan as plan mode being switched', () => {
+  assert.deepEqual(commands.planCommand('/plan move the files'), { start: 'move the files' });
+  assert.deepEqual(commands.planCommand('/plan'), { start: '' });
+  assert.deepEqual(commands.planCommand('/PLAN exit'), { exit: true });
+  assert.deepEqual(commands.planCommand('/plan off'), { exit: true });
+  assert.equal(commands.planCommand('/planet'), null);
+  assert.equal(commands.planCommand('make a /plan'), null);
+  // On its own, or leaving, it sends nothing; with a task it goes to the model.
+  assert.equal(commands.planControl('/plan'), true);
+  assert.equal(commands.planControl('/plan exit'), true);
+  assert.equal(commands.planControl('/plan move the files'), false);
+  assert.equal(commands.planControl('hello'), false);
+  assert.deepEqual(commands.planCommand('> an earlier reply\n\n/plan fix it'), { start: 'fix it' });
+});
+
 test('plan mode tells looking from changing', () => {
-  for (const name of ['write_file', 'edit_file', 'delete_path', 'run_python', 'run_shell', 'phone_tap', 'gmail_send', 'skill_manage']) {
+  for (const name of ['write_file', 'edit_file', 'delete_path', 'run_python', 'run_shell', 'phone_tap', 'gmail_send', 'skill_manage', 'goal_start', 'goal_edit', 'goal_delete', 'goal_done']) {
     assert.equal(commands.changesThings(name), true, name);
   }
-  for (const name of ['read_file', 'list_files', 'web_search', 'phone_screen', 'gmail_search', 'skill_view', 'ask_user']) {
+  for (const name of ['read_file', 'list_files', 'web_search', 'phone_screen', 'gmail_search', 'skill_view', 'ask_user', 'todo_write', 'exit_plan_mode']) {
     assert.equal(commands.changesThings(name), false, name);
   }
 });

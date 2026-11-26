@@ -11,6 +11,7 @@ import { useSettings } from '@/store/settings';
 // Where the slider starts when a limit is first turned on.
 const DEFAULT_LIMIT = 50;
 const LIMIT = { min: 10, max: 200, step: 10 };
+const GOAL_LIMIT = { min: 5, max: 100, step: 5 };
 
 /** Whether Clanker's accessibility service is on, checked again whenever the app comes back to the front. */
 function usePhoneService() {
@@ -31,6 +32,8 @@ export default function ToolsScreen() {
   const setToolsEnabled = useSettings((s) => s.setToolsEnabled);
   const maxSteps = useSettings((s) => s.maxSteps);
   const setMaxSteps = useSettings((s) => s.setMaxSteps);
+  const goalMaxTurns = useSettings((s) => s.goalMaxTurns);
+  const setGoalMaxTurns = useSettings((s) => s.setGoalMaxTurns);
   const phoneOn = usePhoneService();
 
   return (
@@ -71,6 +74,18 @@ export default function ToolsScreen() {
               onPress={() => void startActivityAsync(ActivityAction.ACCESSIBILITY_SETTINGS)}
             />
           )}
+          {group.title === 'Goals' && (
+            <View style={[styles.card, !tools && styles.off]}>
+              <Text style={[styles.value, { color: colors.text }]}>
+                {goalMaxTurns}
+                <Text style={[styles.unit, { color: colors.textTertiary }]}> automatic turns in a row</Text>
+              </Text>
+              <Slider value={goalMaxTurns} {...GOAL_LIMIT} accessibilityLabel="Automatic turns per goal" onChange={setGoalMaxTurns} />
+              <Text style={[styles.hint, { color: colors.textTertiary }]}>
+                After this many turns on its own, a goal pauses until you resume it or send a message.
+              </Text>
+            </View>
+          )}
           {group.tools
             .filter(entryAvailable)
             .map((entry) => (
@@ -96,4 +111,5 @@ const styles = StyleSheet.create({
   off: { opacity: 0.4, pointerEvents: 'none' },
   value: { fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
   unit: { fontSize: 15, fontWeight: '400' },
+  hint: { fontSize: 13, lineHeight: 18 },
 });

@@ -12,45 +12,61 @@ export type Command = { name: CommandName; description: string; icon: keyof type
 
 export const COMMANDS: Command[] = [
   { name: 'goal', description: 'Set a goal and keep working on it until it’s done', icon: 'target' },
-  { name: 'plan', description: 'Look into the task and propose a plan before changing anything', icon: 'map' },
+  { name: 'plan', description: 'Research first, then propose a plan for you to approve', icon: 'map' },
 ];
 
 /** The message's own text, after any quotes picked from the chat (see lib/quotes). */
 const body = (text: string) => splitQuotes(text).text.trim();
 
-const CLEAR_GOAL = /^(clear|stop|off|cancel|done|none|reset|end)$/i;
+const CLEAR_WORDS = /^(clear|stop|off|cancel|done|none|reset|end|delete|remove)$/i;
+const PAUSE_WORDS = /^(pause|hold)$/i;
+const RESUME_WORDS = /^(resume|continue|unpause)$/i;
+
+export type GoalCommand = { goal: string } | { clear: true } | { pause: true } | { resume: true } | { status: true };
 
 /**
- * What a message starting with /goal asks for: a goal to set, or, with nothing after it (or
- * "clear", "stop" and the like), the current one cleared. Null for any other message.
+ * What a message starting with /goal asks for: a goal to set; "clear", "stop" and the like to end
+ * the current one; "pause" or "resume"; or, with nothing after it, how the goal is doing. Null for
+ * any other message.
  */
-export function goalCommand(text: string): { goal: string } | { clear: true } | null {
+export function goalCommand(text: string): GoalCommand | null {
   const m = /^\/goal(?=\s|$)([\s\S]*)$/i.exec(body(text));
   if (!m) return null;
   const goal = m[1].trim();
-  return !goal || CLEAR_GOAL.test(goal) ? { clear: true } : { goal };
+  if (!goal) return { status: true };
+  if (CLEAR_WORDS.test(goal)) return { clear: true };
+  if (PAUSE_WORDS.test(goal)) return { pause: true };
+  if (RESUME_WORDS.test(goal)) return { resume: true };
+  return { goal };
 }
 
-/** Whether the message only clears the goal: "/goal" alone, or "/goal clear" and the like. */
-export const goalClear = (text: string) => {
+/** Whether the message only manages the goal (clear, pause, resume, status) and sends nothing to the model. */
+export const goalControl = (text: string) => {
   const command = goalCommand(text);
-  return !!command && 'clear' in command;
+  return !!command && !('goal' in command);
 };
+
+const END_PLAN = /^(exit|off|cancel|stop|done|end|clear|none|reset)$/i;
+
+/**
+ * What a message starting with /plan asks for: plan mode on, with the task to plan if there is one
+ * (an empty string when there isn't), or, with "exit", "off" and the like, plan mode ended.
+ */
+export function planCommand(text: string): { start: string } | { exit: true } | null {
+  const m = /^\/plan(?=\s|$)([\s\S]*)$/i.exec(body(text));
+  if (!m) return null;
+  const task = m[1].trim();
+  return END_PLAN.test(task) ? { exit: true } : { start: task };
+}
 
 /** Whether the message starts with /plan. */
 export const isPlanRequest = (text: string) => /^\/plan(?=\s|$)/i.test(body(text));
 
-// ---- plan mode ------------------------------------------------------------------------------
-
-/** Chats whose running reply answers a /plan message, and so may only look, not change things. */
-const planning = new Set<string>();
-
-export function setPlanning(conversationId: string, on: boolean) {
-  if (on) planning.add(conversationId);
-  else planning.delete(conversationId);
-}
-
-export const isPlanning = (conversationId: string) => planning.has(conversationId);
+/** Whether the message only switches plan mode on or off, with nothing to send to the model. */
+export const planControl = (text: string) => {
+  const command = planCommand(text);
+  return !!command && ('exit' in command || !command.start);
+};
 
 // Built-in tools that change files, run code or act; everything else only looks.
 const CHANGING_TOOLS = new Set([
@@ -66,6 +82,11 @@ const CHANGING_TOOLS = new Set([
   'memory_update',
   'memory_forget',
   'skill_manage',
+  // The plan decides what to work toward; a goal is set when the user approves it.
+  'goal_start',
+  'goal_edit',
+  'goal_delete',
+  'goal_done',
 ]);
 const PHONE_LOOKING = new Set(['phone_screen', 'phone_list_apps']);
 
@@ -79,4 +100,4 @@ export function changesThings(name: string) {
 }
 
 export const PLAN_REFUSAL =
-  'Not run: this reply answers /plan, so it may only look into the task, not change anything. Put this step in your plan; it can be carried out once the user agrees.';
+  'Not run: plan mode is on, so you may only look into the task (read, search, browse, ask the user), not change anything. Put this step in your plan and submit it with exit_plan_mode; it can be carried out once the user approves.';

@@ -28,6 +28,7 @@ import { RemoteReply } from './RemoteReply';
 import { areasSelect, SelectionArea } from './SelectionArea';
 import { Markdown } from './Markdown';
 import { NestedScroll } from './NestedScroll';
+import { PlanCard } from './PlanCard';
 import { QuestionCard } from './QuestionCard';
 import { SiteChips, SourcesButton } from './Sources';
 import { useFadeText } from './StreamFade';
@@ -517,9 +518,18 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   // Questions waiting on the user show under the work rather than in it, where folding could hide them.
   const asking = message.content.filter((p): p is ToolPart => p.type === 'tool' && p.name === 'ask_user' && p.status === 'running');
 
+  // A plan being written or waiting for approval shows there too; once decided it folds into the work.
+  const planning = message.content.filter(
+    (p): p is ToolPart => p.type === 'tool' && p.name === 'exit_plan_mode' && (p.status === 'writing' || p.status === 'running')
+  );
+
   const render = (seg: Segment, i: number) =>
     seg.kind === 'tool' ? (
-      !asking.includes(seg.part) && <ToolCall key={seg.part.id} part={seg.part} />
+      seg.part.name === 'exit_plan_mode' ? (
+        !planning.includes(seg.part) && <PlanCard key={seg.part.id} part={seg.part} />
+      ) : (
+        !asking.includes(seg.part) && <ToolCall key={seg.part.id} part={seg.part} />
+      )
     ) : seg.kind === 'thought' ? (
       <Thoughts
         key={`r${i}`}
@@ -554,6 +564,9 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
       )}
       {asking.map((part) => (
         <QuestionCard key={part.id} part={part} />
+      ))}
+      {planning.map((part) => (
+        <PlanCard key={part.id} part={part} />
       ))}
       {/* Folded work already says the model is at it, in its header and current step. */}
       {waiting && !(split && !workOpen) && (
