@@ -1,4 +1,4 @@
-# Unreleased
+# Clanker 1.3.0-beta.7
 
 ## Plan mode, the way Claude Code does it
 - **/plan** now puts the chat in **plan mode** and keeps it there: replies research only (read, search, browse, ask you questions), anything that changes files, runs code, acts in apps or saves memories is refused, and a **Plan mode** chip above the box says so. `/plan <task>` starts planning that task; `/plan exit` or the chip's ✕ leaves.
