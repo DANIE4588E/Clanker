@@ -82,6 +82,24 @@ export function describeCall(name: string, input: Record<string, unknown>) {
       return `Search chats “${p('query')}”`;
     case 'read_chat':
       return 'Read an earlier chat';
+    case 'skill_view':
+      return p('file') ? `Read ${p('name')}/${p('file')}` : `Use skill ${p('name')}`;
+    case 'skill_manage':
+      switch (p('action')) {
+        case 'create':
+          return `Saved skill ${p('name')}`;
+        case 'patch':
+        case 'edit':
+          return `Improved skill ${p('name')}`;
+        case 'write_file':
+          return `Added ${p('file_path')} to skill ${p('name')}`;
+        case 'remove_file':
+          return `Removed ${p('file_path')} from skill ${p('name')}`;
+        case 'delete':
+          return `Deleted skill ${p('name')}`;
+        default:
+          return `Change skill ${p('name')}`;
+      }
     case 'phone_screen':
       return input.screenshot ? 'Take a screenshot' : 'Look at the screen';
     case 'phone_tap': {

@@ -618,11 +618,37 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           </Text>
         </Pressable>
       )}
+      {!!message.skillSaved?.length && (
+        <Pressable
+          onPress={() =>
+            message.skillSaved!.length === 1
+              ? router.push({ pathname: '/skills/skill', params: { name: message.skillSaved![0].name } })
+              : router.push('/skills')
+          }
+          hitSlop={6}
+          style={({ pressed }) => [styles.memory, pressed && { opacity: 0.5 }]}
+          accessibilityLabel={skillLabel(message.skillSaved)}
+        >
+          <Feather name="book-open" size={13} color={colors.textTertiary} />
+          <Text numberOfLines={1} style={[styles.memoryText, { color: colors.textTertiary }]}>
+            {skillLabel(message.skillSaved)}
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }
 
 export const MessageBubble = memo(MessageBubbleInner);
+
+/** "Skill learned · a · Skill improved · b", for the line under a reply the skill review changed. */
+function skillLabel(saved: { name: string; created: boolean }[]) {
+  const created = saved.filter((s) => s.created).map((s) => s.name);
+  const improved = saved.filter((s) => !s.created).map((s) => s.name);
+  return [created.length && `Skill learned · ${created.join(', ')}`, improved.length && `Skill improved · ${improved.join(', ')}`]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 const styles = StyleSheet.create({
   userRow: { alignItems: 'flex-end', paddingHorizontal: 16, marginVertical: 10, gap: 6 },

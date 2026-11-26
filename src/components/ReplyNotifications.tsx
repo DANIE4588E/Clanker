@@ -7,7 +7,7 @@ import { useUI } from '@/store/ui';
 import { openProjectChat } from './ProjectMenu';
 
 /** Shows the chat from on top of whatever screens are open. */
-function openChat(id: string) {
+export function openChat(id: string) {
   const conversation = useChats.getState().conversations[id];
   if (!conversation || useUI.getState().currentId === id) return;
   if (router.canDismiss()) router.dismissAll();

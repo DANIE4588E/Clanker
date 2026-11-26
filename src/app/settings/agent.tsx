@@ -5,6 +5,7 @@ import { useTheme } from '@/lib/theme';
 import { countToolsOn, webDetail } from '@/lib/tools/summary';
 import { SEARCH_PROVIDERS } from '@/lib/tools/web';
 import { useSettings } from '@/store/settings';
+import { useSkills } from '@/store/skills';
 
 /** Settings → Agent: the tools models can call on this phone. */
 export default function AgentScreen() {
@@ -15,6 +16,9 @@ export default function AgentScreen() {
   const web = useSettings((s) => s.web);
   const setWeb = useSettings((s) => s.setWeb);
   const searchProvider = useSettings((s) => s.search.provider);
+  const skillsAuto = useSettings((s) => s.skillsAuto);
+  const setSkillsAuto = useSettings((s) => s.setSkillsAuto);
+  const skillCount = useSkills((s) => Object.values(s.skills).filter((k) => k.enabled).length);
 
   const { on, total } = countToolsOn(disabledTools);
 
@@ -40,6 +44,27 @@ export default function AgentScreen() {
           value={web && tools}
           onValueChange={setWeb}
           onPress={() => router.push('/settings/search')}
+          disabled={!tools}
+        />
+      </Section>
+
+      <Section
+        title="Skills"
+        footer="Models load the skills that match a task. Self-improving skills lets them save what worked on long tasks as new skills, and fix skills that turned out wrong."
+      >
+        <Row
+          icon="book-open"
+          title="Skills"
+          detail={skillCount ? `${skillCount} offered to models` : 'Install or write skills for models to use'}
+          onPress={() => router.push('/skills')}
+        />
+        <ToggleRow
+          icon="zap"
+          title="Self-improving skills"
+          detail={tools ? 'Save and improve skills from tasks' : 'Needs files & code'}
+          value={skillsAuto && tools}
+          onValueChange={setSkillsAuto}
+          onPress={() => router.push({ pathname: '/settings/task-model', params: { task: 'skills' } })}
           disabled={!tools}
         />
       </Section>

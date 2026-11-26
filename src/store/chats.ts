@@ -7,6 +7,7 @@ import type { AttachmentPart, ContentPart, Role, ToolPart } from '@/lib/provider
 import { jsonFileStorage, uid } from '@/lib/storage';
 import { chatWorkspace } from '@/lib/workspace';
 import type { Memory } from './memory';
+import type { SkillRef } from './skills';
 import type { RemoteReply, RemoteSession } from '@/lib/remote/types';
 import { removeRemoteCache } from '@/lib/remote/cache';
 
@@ -29,6 +30,8 @@ export interface Message {
   thoughtMs?: number;
   /** Memories the after-reply pass saved or changed from this reply. */
   memorySaved?: string[];
+  /** Skills the after-reply review saved or improved from this reply, by name. */
+  skillSaved?: { name: string; created: boolean }[];
   /** Numbers from each model response that made up this reply (see lib/stats). */
   steps?: StepStats[];
   /** Decode speed and cache hits over the chat's last few responses, as of this reply's last one. */
@@ -82,6 +85,8 @@ export interface ContextNote {
   workspace?: string;
   /** Memory changes since the chat began, when the note shows them (only when they changed). */
   memory?: string;
+  /** Skill changes since the chat began, when the note shows them (only when they changed). */
+  skills?: string;
 }
 
 /** A message the user sent while a reply was running, waiting to go out. */
@@ -123,6 +128,8 @@ export interface Conversation {
    * must not change; later changes reach the model through context notes.
    */
   memoryBase?: Memory[];
+  /** The skills offered at the chat's first request with tools; like memoryBase, for a stable system prompt. */
+  skillBase?: SkillRef[];
   /** The project the chat belongs to; it works in the project's workspace. */
   projectId?: string;
   /** Set on chats from before workspaces were per chat: they keep the one they all shared. */
@@ -173,6 +180,7 @@ interface ChatsState {
   setNote: (id: string, key: string, note: ContextNote) => void;
   setQueue: (id: string, queue: QueuedMessage[]) => void;
   setMemoryBase: (id: string, memories: Memory[]) => void;
+  setSkillBase: (id: string, skills: SkillRef[]) => void;
   /** Records file signatures as seen by the model; null forgets a path. */
   observe: (id: string, entries: Record<string, string | null>) => void;
   /** Removes the message with `messageId` and everything after it. */
@@ -346,6 +354,7 @@ export const useChats = create<ChatsState>()(
         setNote: (id, key, note) => patchConversation(id, (c) => ({ notes: { ...c.notes, [key]: note } })),
         setQueue: (id, queue) => patchConversation(id, () => ({ queue: queue.length ? queue : undefined })),
         setMemoryBase: (id, memoryBase) => patchConversation(id, () => ({ memoryBase })),
+        setSkillBase: (id, skillBase) => patchConversation(id, () => ({ skillBase })),
         observe: (id, entries) =>
           patchConversation(id, (c) => {
             const observed = { ...c.observed };

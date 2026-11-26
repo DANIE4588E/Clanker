@@ -67,6 +67,8 @@ interface SettingsState {
   memory: boolean;
   /** Whether a short request after each reply saves anything worth remembering from it. */
   memoryAuto: boolean;
+  /** Whether models create and improve skills from their work: skill_manage, and a review after long tasks. */
+  skillsAuto: boolean;
   /** Whether the chat lists show archived chats. */
   showArchived: boolean;
   /** Whether a short request after the first reply names the chat. */
@@ -79,6 +81,8 @@ interface SettingsState {
   suggestionModel: ModelRef | null;
   /** The model that saves memories after each reply, or null for the chat's own model. */
   memoryModel: ModelRef | null;
+  /** The model that reviews long tasks for skills to save, or null for the chat's own model. */
+  skillModel: ModelRef | null;
   suggestionRefresh: SuggestionRefresh;
   /** Whether providers and models show as brand marks with tidied names instead of raw ids. */
   friendlyModelNames: boolean;
@@ -101,12 +105,14 @@ interface SettingsState {
   setCompression: (compression: CompressionConfig) => void;
   setMemory: (on: boolean) => void;
   setMemoryAuto: (on: boolean) => void;
+  setSkillsAuto: (on: boolean) => void;
   setShowArchived: (on: boolean) => void;
   setTitleGeneration: (on: boolean) => void;
   setSuggestions: (on: boolean) => void;
   setTitleModel: (ref: ModelRef | null) => void;
   setSuggestionModel: (ref: ModelRef | null) => void;
   setMemoryModel: (ref: ModelRef | null) => void;
+  setSkillModel: (ref: ModelRef | null) => void;
   setSuggestionRefresh: (when: SuggestionRefresh) => void;
   setFriendlyModelNames: (on: boolean) => void;
   setChatDetail: (detail: ChatDetail) => void;
@@ -132,12 +138,14 @@ export const useSettings = create<SettingsState>()(
       compression: COMPRESSION_DEFAULTS,
       memory: true,
       memoryAuto: true,
+      skillsAuto: true,
       showArchived: false,
       titleGeneration: true,
       suggestions: true,
       titleModel: null,
       suggestionModel: null,
       memoryModel: null,
+      skillModel: null,
       suggestionRefresh: 'launch',
       friendlyModelNames: true,
       chatDetail: 'normal',
@@ -172,7 +180,8 @@ export const useSettings = create<SettingsState>()(
         const titleModel = get().titleModel?.endpointId === id ? null : get().titleModel;
         const suggestionModel = get().suggestionModel?.endpointId === id ? null : get().suggestionModel;
         const memoryModel = get().memoryModel?.endpointId === id ? null : get().memoryModel;
-        set({ endpoints, active, efforts, titleModel, suggestionModel, memoryModel });
+        const skillModel = get().skillModel?.endpointId === id ? null : get().skillModel;
+        set({ endpoints, active, efforts, titleModel, suggestionModel, memoryModel, skillModel });
       },
       setActive: (active) => set({ active }),
       setTheme: (theme) => set({ theme }),
@@ -192,12 +201,14 @@ export const useSettings = create<SettingsState>()(
       setCompression: (compression) => set({ compression }),
       setMemory: (memory) => set({ memory }),
       setMemoryAuto: (memoryAuto) => set({ memoryAuto }),
+      setSkillsAuto: (skillsAuto) => set({ skillsAuto }),
       setShowArchived: (showArchived) => set({ showArchived }),
       setTitleGeneration: (titleGeneration) => set({ titleGeneration }),
       setSuggestions: (suggestions) => set({ suggestions }),
       setTitleModel: (titleModel) => set({ titleModel }),
       setSuggestionModel: (suggestionModel) => set({ suggestionModel }),
       setMemoryModel: (memoryModel) => set({ memoryModel }),
+      setSkillModel: (skillModel) => set({ skillModel }),
       setSuggestionRefresh: (suggestionRefresh) => set({ suggestionRefresh }),
       setFriendlyModelNames: (friendlyModelNames) => set({ friendlyModelNames }),
       setChatDetail: (chatDetail) => set({ chatDetail }),
@@ -281,7 +292,7 @@ export function resolveBudget(endpoint: Pick<Endpoint, 'baseUrl' | 'contexts' | 
 }
 
 /**
- * The endpoint and model a side task (titles, suggestions, memory) should use: its own choice while that
+ * The endpoint and model a side task (titles, suggestions, memory, skills) should use: its own choice while that
  * model still exists, otherwise null so the caller falls back to the chat's model.
  */
 export function resolveTaskModel(endpoints: Endpoint[], ref: ModelRef | null) {

@@ -9,6 +9,8 @@ import { askToNotify, notifyReplyFinished } from './notifications';
 import { workspaceFor, workspaceOf } from './projects';
 import { parsePartialJson } from './partialJson';
 import { firstLine } from './quotes';
+import { ensureSkillBase } from './skills';
+import { reviewSkills, shouldReviewSkills } from './skills/review';
 import { getAdapter, isSubscriptionType, ProviderError, type AttachmentPart, type ContentPart, type Endpoint, type ToolCallDraft, type ToolPart } from './providers';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 import { recordStep, stepStats } from './stats';
@@ -217,6 +219,7 @@ export function branchToNewChat(conversationId: string, messageId: string) {
     ...(!own && c.observed ? { observed: c.observed } : {}),
     ...(c.memory === false ? { memory: false as const } : {}),
     ...(c.memoryBase ? { memoryBase: c.memoryBase } : {}),
+    ...(c.skillBase ? { skillBase: c.skillBase } : {}),
     ...(c.projectId ? { projectId: c.projectId } : {}),
     ...(c.workspace ? { workspace: c.workspace } : {}),
   };
@@ -394,6 +397,8 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
   const tools = offered.length ? offered : undefined;
   // The memories this chat's system prompt shows are fixed on its first request.
   ensureMemoryBase(id);
+  // So are the skills it lists, once it has the tools to load them.
+  if (tools) ensureSkillBase(id);
   const system = systemPrompt(id, !!tools);
   const budget = resolveBudget(endpoint, conversation.model);
   const { compression } = useSettings.getState();
@@ -614,6 +619,11 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
   const managed = reply()?.content.some((p) => p.type === 'tool' && p.name.startsWith('memory_'));
   if (latest && !stopped && !managed && memoryOn(id) && useSettings.getState().memoryAuto) {
     void extractMemories(id, replyId, endpoint, apiKey, conversation.model);
+  }
+  // A reply that did real work is reviewed for skills worth saving or fixing (see lib/skills/review).
+  const calls = reply()?.content.filter((p): p is ToolPart => p.type === 'tool' && p.status !== 'writing') ?? [];
+  if (latest && !stopped && shouldReviewSkills(calls)) {
+    void reviewSkills(id, replyId, endpoint, apiKey, conversation.model);
   }
   // The next queued message goes out as the following turn. A stopped reply holds the queue until
   // the user sends from it.

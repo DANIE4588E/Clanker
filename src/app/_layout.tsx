@@ -98,6 +98,10 @@ export default function RootLayout() {
               <Stack.Screen name="projects/chat" options={{ headerShown: false }} />
               <Stack.Screen name="projects/edit" options={{ title: 'Edit project' }} />
               <Stack.Screen name="projects/instructions" options={{ title: 'Instructions' }} />
+              <Stack.Screen name="skills/index" options={{ title: 'Skills' }} />
+              <Stack.Screen name="skills/skill" options={{ title: '' }} />
+              <Stack.Screen name="skills/edit" options={{ title: '' }} />
+              <Stack.Screen name="skills/install" options={{ presentation: 'modal', title: 'Install skills' }} />
             </Stack>
             <OverlayHost />
             <DialogHost />

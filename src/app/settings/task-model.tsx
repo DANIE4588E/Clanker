@@ -7,7 +7,7 @@ import { PROVIDER_LABELS } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import { resolveTaskModel, useSettings, type ModelRef, type SuggestionRefresh } from '@/store/settings';
 
-type Task = 'title' | 'suggestions' | 'memory';
+type Task = 'title' | 'suggestions' | 'memory' | 'skills';
 
 const REFRESHES: { value: SuggestionRefresh; label: string; icon: 'calendar' | 'power' | 'plus-square' }[] = [
   { value: 'daily', label: 'Daily', icon: 'calendar' },
@@ -52,6 +52,16 @@ const TASKS = {
     fallback: "The chat's model",
     fallbackDetail: 'Whichever model the chat uses',
   },
+  skills: {
+    screen: 'Self-improving skills',
+    icon: 'zap',
+    toggle: 'Self-improving skills',
+    detail: 'Save and improve skills from tasks',
+    intro:
+      'Models with tools save what worked as skills, and fix skills that turned out wrong, as they go. After a reply with five or more tool calls that saved nothing, one extra request also asks a model whether the task is worth keeping. It thinks and writes the skill itself, so a capable model gives the best results.',
+    fallback: "The chat's model",
+    fallbackDetail: 'Whichever model the chat uses',
+  },
 } as const;
 
 /**
@@ -61,18 +71,24 @@ const TASKS = {
 export default function TaskModelScreen() {
   const { colors } = useTheme();
   const { task: param } = useLocalSearchParams<{ task?: string }>();
-  const task: Task = param === 'suggestions' || param === 'memory' ? param : 'title';
+  const task: Task = param === 'suggestions' || param === 'memory' || param === 'skills' ? param : 'title';
   const copy = TASKS[task];
 
   const endpoints = useSettings((s) => s.endpoints);
   const friendly = useSettings((s) => s.friendlyModelNames);
   const on = useSettings((s) =>
-    task === 'title' ? s.titleGeneration : task === 'memory' ? s.memoryAuto && s.memory : s.suggestions
+    task === 'title'
+      ? s.titleGeneration
+      : task === 'memory'
+        ? s.memoryAuto && s.memory
+        : task === 'skills'
+          ? s.skillsAuto
+          : s.suggestions
   );
   // Saving automatically needs memory itself on.
   const memoryOff = useSettings((s) => task === 'memory' && !s.memory);
   const chosen = useSettings((s) =>
-    task === 'title' ? s.titleModel : task === 'memory' ? s.memoryModel : s.suggestionModel
+    task === 'title' ? s.titleModel : task === 'memory' ? s.memoryModel : task === 'skills' ? s.skillModel : s.suggestionModel
   );
   const refresh = useSettings((s) => s.suggestionRefresh);
   const setRefresh = useSettings((s) => s.setSuggestionRefresh);
@@ -80,12 +96,14 @@ export default function TaskModelScreen() {
     const s = useSettings.getState();
     if (task === 'title') s.setTitleGeneration(value);
     else if (task === 'memory') s.setMemoryAuto(value);
+    else if (task === 'skills') s.setSkillsAuto(value);
     else s.setSuggestions(value);
   };
   const choose = (ref: ModelRef | null) => {
     const s = useSettings.getState();
     if (task === 'title') s.setTitleModel(ref);
     else if (task === 'memory') s.setMemoryModel(ref);
+    else if (task === 'skills') s.setSkillModel(ref);
     else s.setSuggestionModel(ref);
   };
   // A choice whose model has since gone counts as the fallback, as it does when generating.

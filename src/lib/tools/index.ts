@@ -8,6 +8,23 @@ import { compress, contextStatus, decompress, searchContext } from '../context';
 import { describeJob, getJob, jobsOf, killJob, startJob, waitForJob } from '../jobs';
 import { memoryInPool, memoryOn, readChat, searchChats } from '../memory';
 import { memoryPool, workspaceFor } from '../projects';
+import {
+  buildSkillMd,
+  deleteSkill,
+  listSkillFiles,
+  parseSkillMd,
+  patchSkillMd,
+  readSkillMd,
+  removeSkillFile,
+  saveSkill,
+  SKILL_FILE,
+  skillFile,
+  skillsLearn,
+  updateSkillMd,
+  withSkillFields,
+  writeSkillFile,
+} from '../skills';
+import { enabledSkills, useSkills } from '@/store/skills';
 import type { ImagePart, Source, ToolCall, ToolSpec } from '../providers';
 import { releaseWorker, runScript, type ScriptResult } from '../runtime';
 import { uid } from '../storage';
@@ -926,6 +943,161 @@ const readChatTool: Tool = {
   },
 };
 
+// ---- skills -------------------------------------------------------------------------------
+
+/** Where a loaded skill's files are copied in the workspace, so its scripts can run there. */
+const skillCopyDir = (name: string) => `.skills/${name}`;
+
+function visibleSkill(name: string) {
+  const skill = useSkills.getState().skills[name];
+  if (!skill?.enabled) {
+    const names = enabledSkills().map((s) => s.name);
+    throw new ToolError(`No skill "${name}". Available skills: ${names.length ? names.join(', ') : 'none'}.`);
+  }
+  return skill;
+}
+
+/** Instructions from a model: a SKILL.md body, or a whole SKILL.md whose body is taken. */
+function bodyOf(content: string) {
+  const parsed = parseSkillMd(content);
+  return parsed.hasFrontmatter ? parsed.body : content;
+}
+
+const skillView: Tool = {
+  name: 'skill_view',
+  description:
+    `Load a skill by name: its full instructions (${SKILL_FILE}) and a list of its files. The files are copied into the workspace under .skills/<name>/ so its scripts can run there. ` +
+    'Pass file to read one of its files (e.g. a reference it points to) instead.',
+  parameters: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      file: { type: 'string', description: `A file in the skill, e.g. "references/forms.md". Omit to load ${SKILL_FILE}.` },
+    },
+    required: ['name'],
+  },
+  async run(input, { workspace }) {
+    const skill = visibleSkill(str(input.name, 'name'));
+    const path = str(input.file, 'file', false);
+    if (path && path.toLowerCase() !== SKILL_FILE.toLowerCase()) {
+      const file = skillFile(skill.name, path);
+      if (!file.exists) {
+        throw new ToolError(`Skill "${skill.name}" has no file "${path}". Its files: ${skill.files.join(', ') || 'none'}.`);
+      }
+      const bytes = file.bytesSync();
+      if (isBinary(bytes)) {
+        return {
+          output: `${path} is a binary file (${formatSize(bytes.length)}). Load the skill to copy it into the workspace at ${skillCopyDir(skill.name)}/.`,
+        };
+      }
+      return { output: clip(new TextDecoder().decode(bytes)) };
+    }
+    const text = readSkillMd(skill.name);
+    const files = listSkillFiles(skill.name);
+    if (!files.length) return { output: clip(text) };
+    const dir = skillCopyDir(skill.name);
+    for (const f of files) {
+      const dest = `${dir}/${f.path}`;
+      workspace.ensureParent(dest);
+      const target = workspace.fileAt(dest);
+      if (target.exists) target.delete();
+      skillFile(skill.name, f.path).copySync(target);
+    }
+    const listing = files.map((f) => `- ${dir}/${f.path} (${formatSize(f.size)})`).join('\n');
+    return {
+      output: `${clip(text)}\n\n[This skill's files, copied into the workspace (paths in ${SKILL_FILE} are relative to ${dir}/):\n${listing}]`,
+    };
+  },
+};
+
+const SKILL_ACTIONS = ['create', 'patch', 'edit', 'write_file', 'remove_file', 'delete'];
+
+const skillManage: Tool = {
+  name: 'skill_manage',
+  description:
+    'Create, improve or remove skills, your procedural memory for kinds of task. Actions: ' +
+    '"create" (name, description, content) saves a new skill; ' +
+    `"patch" (name, old_string, new_string, replace_all?) makes a targeted fix to its ${SKILL_FILE}, the preferred way to improve one; ` +
+    '"edit" (name, content and/or description) rewrites its instructions or description; ' +
+    '"write_file" (name, file_path, file_content) adds or replaces a script, reference or template in it; ' +
+    '"remove_file" (name, file_path); "delete" (name) removes a skill a model made.',
+  parameters: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: SKILL_ACTIONS },
+      name: { type: 'string', description: 'Lowercase letters, digits and hyphens, e.g. "excel-pivot-reports".' },
+      description: {
+        type: 'string',
+        description: 'What the skill does and when to use it, in one or two sentences; models choose skills by this.',
+      },
+      content: { type: 'string', description: `The instructions: the markdown body of ${SKILL_FILE}, without frontmatter.` },
+      old_string: { type: 'string', description: `For patch: text in ${SKILL_FILE} to replace, copied exactly.` },
+      new_string: { type: 'string', description: 'For patch: the replacement.' },
+      replace_all: { type: 'boolean', description: 'For patch: replace every occurrence.' },
+      file_path: { type: 'string', description: 'For write_file and remove_file: a path in the skill, e.g. "scripts/convert.py".' },
+      file_content: { type: 'string', description: "For write_file: the file's text." },
+    },
+    required: ['action', 'name'],
+  },
+  async run(input, { conversationId }) {
+    const action = str(input.action, 'action');
+    const name = str(input.name, 'name').trim();
+    if (!SKILL_ACTIONS.includes(action)) throw new ToolError(`Unknown action "${action}". Use one of: ${SKILL_ACTIONS.join(', ')}.`);
+    if (action === 'create') {
+      const existing = useSkills.getState().skills[name];
+      if (existing) {
+        throw new ToolError(
+          existing.enabled
+            ? `A skill named "${name}" already exists. Improve it with patch or edit, or pick another name.`
+            : `A skill named "${name}" exists but the user turned it off. Pick another name.`
+        );
+      }
+      const content = str(input.content, 'content');
+      const description = str(input.description, 'description', false) || parseSkillMd(content).description;
+      const skill = saveSkill({ skillMd: buildSkillMd(name, description, bodyOf(content)), name, source: 'model', conversationId });
+      return { output: `Saved skill "${skill.name}". New chats are offered it.` };
+    }
+    const skill = visibleSkill(name);
+    switch (action) {
+      case 'patch': {
+        const count = patchSkillMd(
+          skill.name,
+          str(input.old_string, 'old_string'),
+          typeof input.new_string === 'string' ? input.new_string : '',
+          input.replace_all === true,
+          'model',
+          conversationId
+        );
+        return { output: `Patched ${skill.name}/${SKILL_FILE} (${count} ${count === 1 ? 'replacement' : 'replacements'}).` };
+      }
+      case 'edit': {
+        const content = str(input.content, 'content', false);
+        const description = str(input.description, 'description', false);
+        if (!content && !description) throw new ToolError('Pass content, description or both.');
+        const fields = { description: description || undefined, body: content ? bodyOf(content) : undefined };
+        updateSkillMd(skill.name, withSkillFields(readSkillMd(skill.name), fields), 'model', conversationId);
+        return { output: `Updated skill "${skill.name}".` };
+      }
+      case 'write_file': {
+        const content = typeof input.file_content === 'string' ? input.file_content : '';
+        const path = writeSkillFile(skill.name, str(input.file_path, 'file_path'), content, 'model', conversationId);
+        return { output: `Wrote ${skill.name}/${path}. Load the skill again to copy it into the workspace.` };
+      }
+      case 'remove_file':
+        removeSkillFile(skill.name, str(input.file_path, 'file_path'), 'model');
+        return { output: `Removed ${input.file_path} from ${skill.name}.` };
+      default:
+        if (skill.source !== 'model' && skill.source !== 'auto') {
+          throw new ToolError(`"${skill.name}" was added by the user; only they can delete it, in Skills. Patch it instead if it is wrong.`);
+        }
+        deleteSkill(skill.name);
+        return { output: `Deleted skill "${skill.name}".` };
+    }
+  },
+};
+
+const SKILL_TOOLS: Tool[] = [skillView, skillManage];
+
 const BACKGROUND_TOOLS = [runPython.name, runJavaScript.name, runShell.name];
 const MEMORY_TOOLS: Tool[] = [memorySave, memoryUpdate, memoryForget, searchChatsTool, readChatTool];
 
@@ -950,6 +1122,7 @@ const TOOLS: Tool[] = [
   searchContextTool,
   contextStatusTool,
   ...MEMORY_TOOLS,
+  ...SKILL_TOOLS,
   ...PHONE_TOOLS,
 ];
 
@@ -968,6 +1141,9 @@ function enabled(tool: Tool, conversationId?: string | null) {
   if (PHONE_TOOLS.includes(tool)) return phoneAvailable();
   if (tool === webSearch || tool === webFetch) return webEnabled();
   if (MEMORY_TOOLS.includes(tool)) return conversationId !== undefined && memoryOn(conversationId);
+  // Loading needs skills to load, unless the model may make them; making them needs the setting.
+  if (tool === skillView) return skillsLearn() || enabledSkills().length > 0;
+  if (tool === skillManage) return skillsLearn();
   return true;
 }
 

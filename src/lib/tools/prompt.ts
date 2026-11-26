@@ -5,6 +5,7 @@ import { compressedKeys, formatTokens, historyOf, historyTokens, unitsOf } from 
 import { describeJob, jobsOf } from '../jobs';
 import { currentMemories, memoriesFor, memoryDiff, memoryOn, memorySection } from '../memory';
 import { projectSection, workspaceFor } from '../projects';
+import { skillsDiff, skillsFor, skillsSection } from '../skills';
 import { formatSize } from '../workspace';
 import { toolOn } from './index';
 
@@ -149,7 +150,7 @@ export function agentSystemPrompt() {
         ? ` Use them whenever a task involves ${uses.join(', or ')}, and keep going until the task is done; don't ask the user to run things themselves.`
         : ''
     }`,
-    'After the latest message or tool result you get a <context> note with the current time and the size of the history, plus the workspace contents, background jobs and memory changes when there is something new to show. Older notes stay where they were; the latest one is current.',
+    'After the latest message or tool result you get a <context> note with the current time and the size of the history, plus the workspace contents, background jobs, and memory and skill changes when there is something new to show. Older notes stay where they were; the latest one is current.',
     lines(
       '# Workspace',
       `${local ? 'All file tools take paths relative to the workspace root. ' : ''}Files the user attaches are copied into the workspace (their paths are noted in the message). Files you create there show up in the chat, where the user can open or share them, so save deliverables (reports, spreadsheets, slides, PDFs, images, code) as real files in the workspace and mention their names.`
@@ -193,7 +194,12 @@ export function systemPrompt(conversationId: string | null, withTools: boolean) 
         chats: withTools && toolOn('search_chats', conversationId),
       })
     : '';
-  const parts = [withTools ? agentSystemPrompt() : '', projectSection(conversationId, withTools), memory].filter(Boolean);
+  // Skills need tools to load them, so chats without tools don't hear of them.
+  const skills =
+    withTools && toolOn('skill_view', conversationId)
+      ? skillsSection(skillsFor(conversationId), { manage: toolOn('skill_manage', conversationId) })
+      : '';
+  const parts = [withTools ? agentSystemPrompt() : '', skills, projectSection(conversationId, withTools), memory].filter(Boolean);
   return parts.length ? parts.join('\n\n') : undefined;
 }
 
@@ -231,6 +237,12 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
     .map((u) => notes[u.key]?.memory)
     .findLast((m) => m != null);
   const memoryNew = memory != null && memory !== (memoryShown ?? '');
+  // Skills installed, made or changed since the chat's snapshot, likewise.
+  const skills = toolOn('skill_view', opts.conversationId) ? skillsDiff(conversation) : undefined;
+  const skillsShown = earlier
+    .map((u) => notes[u.key]?.skills)
+    .findLast((s) => s != null);
+  const skillsNew = skills != null && skills !== (skillsShown ?? '');
 
   const lines = [
     '<context>',
@@ -245,11 +257,20 @@ export function writeContextNote(opts: { conversationId: string; replyId: string
             : 'Memory is back to how it was when this chat began.',
         ]
       : []),
+    ...(skillsNew
+      ? [
+          skills
+            ? `Skill changes since this chat began (replaces any earlier list; load them with skill_view):
+${skills}`
+            : 'The skills are back to how they were when this chat began.',
+        ]
+      : []),
     '</context>',
   ];
   useChats.getState().setNote(opts.conversationId, last.key, {
     text: lines.join('\n'),
     ...(workspace !== shown ? { workspace } : {}),
     ...(memoryNew ? { memory } : {}),
+    ...(skillsNew ? { skills } : {}),
   });
 }
