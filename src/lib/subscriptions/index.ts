@@ -3,10 +3,17 @@ import type { BrandId } from '../modelNames';
 import { ProviderError } from '../providers/http';
 import type { Endpoint, SubscriptionType } from '../providers/types';
 import { credentialSlot, runExclusiveRefresh, subscriptionAuth, type SubscriptionCredentials } from './credentials';
+import {
+  bootstrapAntigravityProject,
+  fetchAntigravityQuota,
+  fetchAntigravityQuotaSummary,
+  parseAntigravityQuota,
+  parseAntigravityQuotaSummary,
+} from './cloudcode';
 import { refreshSubscriptionCredentials } from './oauth';
 import { parseClaudeUsage, parseCodexUsage, type SubscriptionUsage } from './usage';
 
-export const SUBSCRIPTION_TYPES: SubscriptionType[] = ['codex', 'claude'];
+export const SUBSCRIPTION_TYPES: SubscriptionType[] = ['codex', 'claude', 'antigravity'];
 
 export type SubscriptionMeta = {
   type: SubscriptionType;
@@ -39,6 +46,16 @@ export const SUBSCRIPTION_META: Record<SubscriptionType, SubscriptionMeta> = {
     signInLabel: 'Sign in with Claude',
     importPlaceholder: 'Paste ~/.claude/.credentials.json or sk-ant-oat01-…',
     importHint: 'Reuse an existing Claude Code login from ~/.claude/.credentials.json if preferred.',
+  },
+  antigravity: {
+    type: 'antigravity',
+    name: 'Antigravity',
+    brand: 'google',
+    baseUrl: 'https://cloudcode-pa.googleapis.com/v1internal',
+    subtitle: 'Google AI Pro or Ultra, signed in on this device',
+    signInLabel: 'Sign in with Google',
+    importPlaceholder: 'Paste Antigravity credentials JSON or a token',
+    importHint: 'Advanced: reuse tokens captured from the Antigravity IDE or Cloud Code CLI on another machine.',
   },
 };
 
@@ -204,6 +221,38 @@ export async function fetchSubscriptionUsage(
       return parseCodexUsage(await res.json());
     }
 
+    if (type === 'antigravity') {
+      try {
+        let projectId = creds.accountId;
+        let plan = creds.plan;
+        if (!projectId) {
+          const info = await bootstrapAntigravityProject(creds.accessToken);
+          projectId = info.projectId;
+          plan = info.planLabel ?? plan;
+          // Cache project + real plan (e.g. 'Google AI Pro') so later fetches skip bootstrap.
+          if (!opts?.credsOverride) {
+            await subscriptionAuth.set(endpoint.id, { ...creds, accountId: projectId, plan }, accountId);
+          }
+        }
+        const usageOpts = { email: creds.email, plan };
+        try {
+          const summary = parseAntigravityQuotaSummary(
+            await fetchAntigravityQuotaSummary(creds.accessToken, projectId),
+            usageOpts
+          );
+          if (summary) return summary;
+        } catch (err) {
+          if (err instanceof ProviderError && err.status === 401) throw err;
+          // Summary endpoint unavailable: fall back to aggregating per-model buckets below.
+        }
+        const quota = await fetchAntigravityQuota(creds.accessToken, projectId);
+        return parseAntigravityQuota(quota, usageOpts);
+      } catch (err) {
+        if (!forceRefresh && err instanceof ProviderError && err.status === 401 && creds.refreshToken) return run(true);
+        throw err;
+      }
+    }
+
     const clientVersion = await resolveClaudeCodeVersion();
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: {
@@ -222,6 +271,7 @@ export async function fetchSubscriptionUsage(
   return run(false);
 }
 
+export * from './cloudcode';
 export * from './credentials';
 export * from './oauth';
 export * from './pkce';

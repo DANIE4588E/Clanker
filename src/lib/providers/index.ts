@@ -1,4 +1,5 @@
 import { anthropic } from './anthropic';
+import { antigravity } from './antigravity';
 import { claudeSub } from './claudeSub';
 import { codex } from './codex';
 import { gemini } from './gemini';
@@ -69,6 +70,7 @@ const adapters: Record<ProviderType, ProviderAdapter> = {
   gemini: withFailover(gemini),
   codex: withFailover(codex),
   claude: withFailover(claudeSub),
+  antigravity: withFailover(antigravity),
   // Nothing to fail over to on the phone itself.
   local,
 };
@@ -84,6 +86,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   gemini: 'Google Gemini',
   codex: 'Codex subscription',
   claude: 'Claude subscription',
+  antigravity: 'Antigravity subscription',
   local: 'llama.cpp',
 };
 

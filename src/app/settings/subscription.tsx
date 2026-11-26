@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import Animated, { LinearTransition } from 'react-native-reanimated';
+import { WebView } from 'react-native-webview';
 import { BrandIcon } from '@/components/BrandIcon';
 import { Disclosure, Input, Label } from '@/components/Form';
 import { SegmentedControl } from '@/components/SegmentedControl';
@@ -31,11 +32,16 @@ import {
 } from '@/lib/providers';
 import { uid } from '@/lib/storage';
 import {
+  ANTIGRAVITY_OAUTH,
   accountsOf,
   accountUsageKey,
+  buildAntigravityAuthSession,
   buildClaudeAuthSession,
+  exchangeAntigravityAuthCode,
   exchangeClaudeAuthCode,
   isAccountCoolingDown,
+  parseAntigravityCallback,
+  parseAntigravityImport,
   parseClaudeImport,
   parseCodexImport,
   pollCodexDeviceAuth,
@@ -94,6 +100,8 @@ export default function SubscriptionScreen() {
   const [reauthAccountId, setReauthAccountId] = useState<string | null>(null);
   const [deviceSession, setDeviceSession] = useState<CodexDeviceSession | null>(null);
   const [browserSession, setBrowserSession] = useState<BrowserCodeSession | null>(null);
+  const [googleSession, setGoogleSession] = useState<BrowserCodeSession | null>(null);
+  const [googleError, setGoogleError] = useState('');
   const [pastedCode, setPastedCode] = useState('');
   const [importText, setImportText] = useState('');
   const [busy, setBusy] = useState<'auth' | 'fetch' | 'test' | null>(null);
@@ -243,6 +251,8 @@ export default function SubscriptionScreen() {
     pollController.current?.abort();
     setDeviceSession(null);
     setBrowserSession(null);
+    setGoogleSession(null);
+    setGoogleError('');
     setPastedCode('');
     setImportText('');
     setReauthAccountId(null);
@@ -372,6 +382,12 @@ export default function SubscriptionScreen() {
       return;
     }
 
+    if (type === 'antigravity') {
+      setGoogleError('');
+      setGoogleSession(buildAntigravityAuthSession());
+      return;
+    }
+
     const session = buildClaudeAuthSession();
     setBrowserSession(session);
     setPastedCode('');
@@ -382,6 +398,8 @@ export default function SubscriptionScreen() {
     pollController.current?.abort();
     setDeviceSession(null);
     setBrowserSession(null);
+    setGoogleSession(null);
+    setGoogleError('');
     setPastedCode('');
     setReauthAccountId(null);
     if (accounts.length > 0) setShowAddAccount(false);
@@ -409,7 +427,11 @@ export default function SubscriptionScreen() {
     setStatus(null);
     try {
       const parsed: SubscriptionCredentials =
-        type === 'codex' ? parseCodexImport(importText) : parseClaudeImport(importText);
+        type === 'codex'
+          ? parseCodexImport(importText)
+          : type === 'antigravity'
+            ? parseAntigravityImport(importText)
+            : parseClaudeImport(importText);
       await afterSignIn(parsed, type);
     } catch (e) {
       setStatus({ ok: false, text: e instanceof Error ? e.message : String(e) });
@@ -740,7 +762,7 @@ export default function SubscriptionScreen() {
               );
             })}
 
-            {accounts.length > 0 && !showAddAccount && !deviceSession && !browserSession && (
+            {accounts.length > 0 && !showAddAccount && !deviceSession && !browserSession && !googleSession && (
               <Pressable
                 onPress={() => {
                   setReauthAccountId(null);
@@ -753,7 +775,7 @@ export default function SubscriptionScreen() {
               </Pressable>
             )}
 
-            {(showAddAccount || accounts.length === 0) && !deviceSession && !browserSession && (
+            {(showAddAccount || accounts.length === 0) && !deviceSession && !browserSession && !googleSession && (
               <View style={[styles.accountCard, { backgroundColor: colors.surface }]}>
                 <Text style={[styles.signInNote, { color: colors.textSecondary }]}>
                   {accounts.length === 0
@@ -814,6 +836,60 @@ export default function SubscriptionScreen() {
               <Pressable onPress={() => void Linking.openURL(deviceSession.verificationUrl)} hitSlop={8}>
                 <Text style={{ color: colors.link, fontSize: 14, fontWeight: '500' }}>Open browser</Text>
               </Pressable>
+              <Pressable onPress={cancelSignIn} hitSlop={8}>
+                <Text style={{ color: colors.textTertiary, fontSize: 14 }}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* Active Google (Antigravity) in-app consent — code is captured from the loopback redirect. */}
+        {googleSession && (
+          <View style={[styles.stepCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.stepTitle, { color: colors.text }]}>Sign in with Google</Text>
+            {!!googleError && (
+              <Text style={[styles.hint, { color: colors.danger, marginHorizontal: 0, marginTop: 4 }]}>{googleError}</Text>
+            )}
+            <View style={[styles.webviewBox, { backgroundColor: colors.background }]}>
+              <WebView
+                source={{ uri: googleSession.authorizeUrl, headers: { 'User-Agent': ANTIGRAVITY_OAUTH.webviewUserAgent } }}
+                customUserAgent={ANTIGRAVITY_OAUTH.webviewUserAgent.replace('; wv', '')}
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled={false}
+                onShouldStartLoadWithRequest={(request) => {
+                  if (!request.url.startsWith(ANTIGRAVITY_OAUTH.redirectUri)) return request.isTopFrame !== false;
+                  // Synthetic loopback redirect — never actually loads; grab ?code= and exchange it here.
+                  void (async () => {
+                    try {
+                      const { code } = parseAntigravityCallback(request.url, googleSession.pkce.state);
+                      const tokens = await exchangeAntigravityAuthCode(code, googleSession);
+                      setGoogleSession(null);
+                      setGoogleError('');
+                      await afterSignIn(tokens, 'antigravity');
+                    } catch (e) {
+                      setGoogleError(e instanceof Error ? e.message : String(e));
+                    }
+                  })();
+                  return false;
+                }}
+                onHttpError={(event) => {
+                  if (!event.nativeEvent.url?.startsWith(ANTIGRAVITY_OAUTH.redirectUri)) {
+                    setGoogleError(`Google sign-in page returned ${event.nativeEvent.statusCode}.`);
+                  }
+                }}
+                onError={(event) => {
+                  if (!event.nativeEvent.url?.startsWith(ANTIGRAVITY_OAUTH.redirectUri)) {
+                    setGoogleError(event.nativeEvent.description || 'Failed to load the Google sign-in page.');
+                  }
+                }}
+              />
+            </View>
+            <View style={styles.stepActions}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                <ActivityIndicator size="small" color={colors.link} />
+                <Text style={{ color: colors.textSecondary, fontSize: 14 }}>Complete sign-in above…</Text>
+              </View>
               <Pressable onPress={cancelSignIn} hitSlop={8}>
                 <Text style={{ color: colors.textTertiary, fontSize: 14 }}>Cancel</Text>
               </Pressable>
@@ -1100,6 +1176,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   stepTitle: { fontSize: 15, fontWeight: '600' },
+  webviewBox: {
+    height: 460,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
   codeBox: {
     flexDirection: 'row',
     alignItems: 'center',

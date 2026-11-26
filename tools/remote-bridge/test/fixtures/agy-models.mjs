@@ -1,0 +1,20 @@
+/** A trim of real `agy models` output: suffixed effort variants, suffixed bases that aren't efforts, and plain ids. */
+export const AGY_MODELS_TSV = [
+  'gemini-4-neon-high\tGemini 4 Neon (High)',
+  'gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)',
+  'gemini-4-neon-medium\tGemini 4 Neon (Medium)',
+  'gemini-4-neon-low\tGemini 4 Neon (Low)',
+  'gemini-4-carbon-medium\tGemini 4 Carbon (Medium)',
+  'gemini-4-carbon-high\tGemini 4 Carbon (High)',
+  'gemini-4-carbon-low\tGemini 4 Carbon (Low)',
+  'gemini-pro-orchestrator-neon\tOrchestrator (Neon)',
+  'gemini-pro-orchestrator\tOrchestrator (Carbon)',
+  'gemini-pro-orchestrator-argon\tOrchestrator (Argon)',
+  'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+  'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+  'claude-opus-5-5-low\tClaude Opus 5.5 (Low)',
+  'claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)',
+  'claude-opus-5-5-high\tClaude Opus 5.5 (High)',
+  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+].join('\n');

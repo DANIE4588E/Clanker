@@ -75,6 +75,7 @@ export function brandOfModel(model: string): BrandId | undefined {
 export function brandOfEndpoint(endpoint: { baseUrl: string; name?: string; type: string }): BrandId | undefined {
   if (endpoint.type === 'codex') return 'openai';
   if (endpoint.type === 'claude') return 'anthropic';
+  if (endpoint.type === 'antigravity') return 'google';
   let host = endpoint.baseUrl;
   try {
     host = new URL(endpoint.baseUrl).hostname;

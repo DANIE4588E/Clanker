@@ -12,7 +12,7 @@ type GeminiModel = { name: string; supportedGenerationMethods?: string[]; thinki
 // Gemini 2.x takes a thinking token budget; later models take a named thinking level.
 const THINKING_BUDGETS: Record<string, number> = { none: 0, minimal: 512, low: 1024, medium: 8192, high: 24576 };
 
-function thinkingConfig(model: string, effort: string) {
+export function thinkingConfig(model: string, effort: string) {
   const levels = !/gemini-2\./.test(model) ? { thinkingLevel: effort } : { thinkingBudget: THINKING_BUDGETS[effort] ?? -1 };
   // Thought summaries are withheld unless asked for; without this the panel would stay empty.
   // REST takes camelCase here, unlike the snake_case inline_data elsewhere in this body.
@@ -92,7 +92,7 @@ export const gemini: ProviderAdapter = {
   },
 };
 
-function toGemini(m: WireMessage) {
+export function toGemini(m: WireMessage) {
   if (m.role === 'tool') {
     const results = m.results ?? [];
     return {

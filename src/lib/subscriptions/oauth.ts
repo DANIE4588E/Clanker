@@ -345,6 +345,179 @@ export function parseClaudeImport(raw: string): SubscriptionCredentials {
   return { accessToken: trimmed };
 }
 
+// ---- Antigravity (Google AI Pro / Ultra via Cloud Code Assist) --------------------------------
+
+/**
+ * The installed-app OAuth client the Antigravity IDE/CLI ship with — the client the Cloud Code
+ * quota endpoint honors for AI Pro/Ultra entitlements. Its secret is non-confidential by design
+ * (installed-app clients can't keep secrets), but it's Google's, not ours, so it stays out of the
+ * repo: set both in `.env.local` (gitignored), which Expo CLI inlines into the bundle. Expo only
+ * inlines the literal `process.env.EXPO_PUBLIC_…` dot form, so don't destructure these.
+ */
+export const ANTIGRAVITY_OAUTH = {
+  clientId: process.env.EXPO_PUBLIC_ANTIGRAVITY_CLIENT_ID ?? '',
+  clientSecret: process.env.EXPO_PUBLIC_ANTIGRAVITY_CLIENT_SECRET ?? '',
+  authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+  tokenUrl: 'https://oauth2.googleapis.com/token',
+  userinfoUrl: 'https://www.googleapis.com/oauth2/v2/userinfo',
+  scopes: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email',
+  /** Synthetic loopback redirect: nothing listens, the WebView intercepts the navigation. */
+  redirectUri: 'http://127.0.0.1:41783/callback',
+  /** Plain Chrome UA so Google's consent page doesn't reject the WebView as "disallowed_useragent". */
+  webviewUserAgent:
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+} as const;
+
+/** The configured OAuth client, or a clear error when `.env.local` is missing it. */
+function antigravityClient(): { clientId: string; clientSecret: string } {
+  const { clientId, clientSecret } = ANTIGRAVITY_OAUTH;
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      'Antigravity sign-in is not configured in this build. Set EXPO_PUBLIC_ANTIGRAVITY_CLIENT_ID and ' +
+        'EXPO_PUBLIC_ANTIGRAVITY_CLIENT_SECRET in .env.local, then restart the bundler.'
+    );
+  }
+  return { clientId, clientSecret };
+}
+
+export function buildAntigravityAuthSession(): BrowserCodeSession {
+  const { clientId } = antigravityClient();
+  const pkce = generatePkce();
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: ANTIGRAVITY_OAUTH.redirectUri,
+    response_type: 'code',
+    scope: ANTIGRAVITY_OAUTH.scopes,
+    code_challenge: pkce.challenge,
+    code_challenge_method: 'S256',
+    state: pkce.state,
+    access_type: 'offline',
+    prompt: 'consent',
+  });
+  return { pkce, authorizeUrl: `${ANTIGRAVITY_OAUTH.authorizeUrl}?${params.toString()}` };
+}
+
+/**
+ * Extracts the authorization code from a navigation to the loopback redirect. Throws on Google
+ * error redirects (`?error=access_denied`) and on state mismatch. Pure so tests can cover it.
+ */
+export function parseAntigravityCallback(url: string, expectedState: string): { code: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Antigravity sign-in redirect could not be parsed.');
+  }
+  const err = parsed.searchParams.get('error');
+  if (err) {
+    const desc = parsed.searchParams.get('error_description');
+    throw new Error(`Google sign-in ${err}${desc ? `: ${desc}` : ''}`);
+  }
+  const code = parsed.searchParams.get('code');
+  if (!code) throw new Error('No authorization code in the Antigravity redirect.');
+  const state = parsed.searchParams.get('state');
+  if (state && state !== expectedState) throw new Error('Antigravity sign-in state mismatch. Try again.');
+  return { code };
+}
+
+async function exchangeGoogleToken(body: Record<string, string>): Promise<SubscriptionCredentials> {
+  const res = await fetch(ANTIGRAVITY_OAUTH.tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: formBody(body),
+  });
+  if (!res.ok) throw await readError(res);
+  const data = (await res.json()) as any;
+  if (!data.access_token) throw new Error('Google token exchange returned no access token.');
+  return {
+    accessToken: data.access_token,
+    ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+    expiresAt: data.expires_in ? Date.now() + Number(data.expires_in) * 1000 : undefined,
+  };
+}
+
+export async function exchangeAntigravityAuthCode(
+  code: string,
+  session: BrowserCodeSession
+): Promise<SubscriptionCredentials> {
+  const { clientId, clientSecret } = antigravityClient();
+  return exchangeGoogleToken({
+    grant_type: 'authorization_code',
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: ANTIGRAVITY_OAUTH.redirectUri,
+    code_verifier: session.pkce.verifier,
+  });
+}
+
+export async function refreshAntigravityToken(creds: SubscriptionCredentials): Promise<SubscriptionCredentials> {
+  if (!creds.refreshToken) {
+    throw new Error('Antigravity session expired and no refresh token was stored. Sign in again in Settings.');
+  }
+  const { clientId, clientSecret } = antigravityClient();
+  const refreshed = await exchangeGoogleToken({
+    grant_type: 'refresh_token',
+    refresh_token: creds.refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  return {
+    ...creds,
+    accessToken: refreshed.accessToken,
+    refreshToken: creds.refreshToken,
+    expiresAt: refreshed.expiresAt ?? creds.expiresAt,
+  };
+}
+
+/** Best-effort account email for the account label; undefined when offline. */
+export async function fetchAntigravityEmail(accessToken: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(ANTIGRAVITY_OAUTH.userinfoUrl, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as any;
+    return typeof json?.email === 'string' ? json.email : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parses pasted Antigravity credentials: a JSON blob with access/refresh tokens (any casing,
+ * `expires_in` or `expires_at`), a raw `ya29.` access token, or a raw Google refresh token.
+ */
+export function parseAntigravityImport(raw: string): SubscriptionCredentials {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error('Paste Antigravity credentials JSON or a token.');
+  if (trimmed.startsWith('{')) {
+    const json = JSON.parse(trimmed);
+    const src = json.credentials ?? json;
+    const accessToken = String(src.access_token ?? src.accessToken ?? '');
+    const refreshToken = src.refresh_token ?? src.refreshToken;
+    const expiresAtRaw = src.expires_at ?? src.expiresAt;
+    let expiresAt: number | undefined;
+    if (typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)) {
+      // Google stores OAuth expiry as epoch seconds; treat small numbers as a relative expiry.
+      expiresAt = expiresAtRaw > 1e12 ? expiresAtRaw : expiresAtRaw > 1e9 ? expiresAtRaw * 1000 : undefined;
+    } else if (typeof src.expires_in === 'number' && Number.isFinite(src.expires_in) && src.expires_in > 0) {
+      expiresAt = Date.now() + src.expires_in * 1000;
+    }
+    if (!accessToken && !refreshToken) throw new Error('No access_token or refresh_token found in JSON.');
+    const projectId = src.projectId ?? src.project_id ?? src.cloudaicompanionProject;
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken: String(refreshToken) } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
+      ...(typeof projectId === 'string' && projectId ? { accountId: projectId } : {}),
+    };
+  }
+  if (trimmed.startsWith('ya29.')) return { accessToken: trimmed };
+  // Anything else is treated as a refresh token (`1//…` for modern Google clients).
+  return { accessToken: '', refreshToken: trimmed, expiresAt: 0 };
+}
+
 export async function refreshSubscriptionCredentials(
   type: SubscriptionType,
   creds: SubscriptionCredentials
@@ -354,5 +527,7 @@ export async function refreshSubscriptionCredentials(
       return refreshCodexToken(creds);
     case 'claude':
       return refreshClaudeToken(creds);
+    case 'antigravity':
+      return refreshAntigravityToken(creds);
   }
 }

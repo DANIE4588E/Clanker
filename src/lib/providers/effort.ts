@@ -23,6 +23,14 @@ export function guessEfforts(type: ProviderType, model: string, effortParam?: Ef
     case 'gemini':
       if (/gemini-3[\w.-]*-pro/.test(id)) return ['low', 'high'];
       return /gemini-(2\.5|[3-9])/.test(id) ? LOW_MEDIUM_HIGH : undefined;
+    case 'antigravity':
+      // Antigravity serves Gemini and Claude models behind the Gemini-shaped API.
+      // Catalog variants like claude-opus-5-5-low or gemini-3.8-flash-high are separate models —
+      // the effort is baked into the id, so no slider.
+      if (/-(low|medium|x?high|max)$/.test(id)) return undefined;
+      if (/gemini-3[\w.-]*-pro/.test(id)) return ['low', 'high'];
+      if (/gemini-(2\.5|[3-9])|claude-(sonnet|opus|haiku)/.test(id)) return LOW_MEDIUM_HIGH;
+      return undefined;
     case 'codex':
       if (/codex-mini/.test(id)) return LOW_MEDIUM_HIGH;
       return /(gpt-[5-9]|codex|astra|sol|terra|luna|o\d)/.test(id) ? ['low', 'medium', 'high', 'xhigh'] : undefined;

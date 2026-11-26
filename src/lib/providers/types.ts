@@ -1,4 +1,4 @@
-export type SubscriptionType = 'codex' | 'claude';
+export type SubscriptionType = 'codex' | 'claude' | 'antigravity';
 
 export type SubscriptionRouting = 'auto' | 'manual';
 
@@ -14,7 +14,7 @@ export type SubscriptionAccount = {
 export type ProviderType = 'openai' | 'anthropic' | 'ollama' | 'gemini' | 'local' | SubscriptionType;
 
 export function isSubscriptionType(type: ProviderType): type is SubscriptionType {
-  return type === 'codex' || type === 'claude';
+  return type === 'codex' || type === 'claude' || type === 'antigravity';
 }
 
 export type ImagePart = {
