@@ -132,7 +132,7 @@ const CANONICAL: Record<string, string> = {
 };
 
 /** Word shapes that read better all caps; everything else is title-cased. */
-const UPPER = /^(gguf|awq|mlx|mxfp[46]|fp[168][ce]?|int[245678]|nf[234]|qlora|bnb|exl[23]|dpo|sft)$/i;
+const UPPER = /^(gguf|awq|mlx|mxfp[46]|fp[168][ce]?|int[245678]|nf[234]|qlora|bnb|exl[23]|dpo|sft|oss)$/i;
 const SIZE = /^a?\d+(\.\d+)?[bm]$/i;
 /** llama.cpp quant tags stay one token: q4_k_m → Q4_K_M. */
 const QUANT = /^q\d(_[a-z]+)+$/i;
@@ -158,5 +158,18 @@ export function friendlyModelName(model: string): string {
   const name = model.split(/[/:]/).filter(Boolean).pop() ?? model;
   // Split on separators, but keep a dot between digits (qwen3.8) as part of the token.
   const tokens = name.replace(/\.(?=\d)/g, '·').split(/[-_. ]+/).filter(Boolean);
-  return tokens.map((t) => humanizeToken(t.replace(/·/g, '.'))).join(' ');
+  // Hyphenated versions read as dotted ones: claude-opus-4-6 → 4.6, llama-3-1-8b → 3.1. Dates
+  // stay apart: in gpt-4o-2024-08-06 the 08 follows a year, so it doesn't join.
+  const merged: string[] = [];
+  for (const token of tokens) {
+    const prev = merged[merged.length - 1];
+    const joinsVersion =
+      /^\d{1,2}$/.test(token) &&
+      prev !== undefined &&
+      /^\d{1,2}(·\d{1,2})*$/.test(prev) &&
+      !/^\d{4,}$/.test(merged[merged.length - 2] ?? '');
+    if (joinsVersion) merged[merged.length - 1] = `${prev}·${token}`;
+    else merged.push(token);
+  }
+  return merged.map((t) => humanizeToken(t.replace(/·/g, '.'))).join(' ');
 }

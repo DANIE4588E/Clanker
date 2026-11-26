@@ -164,6 +164,65 @@ export function parseAntigravityModels(json: any): AntigravityModelEntry[] {
   return entries.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** Effort levels Antigravity bakes into variant ids (`gemini-4-neon-xhigh`), lowest first. */
+const VARIANT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const VARIANT_SUFFIX = new RegExp(`-(${VARIANT_LEVELS.join('|')})$`);
+
+export type AntigravityModelChoice = { id: string; efforts?: string[]; contextLength?: number };
+
+/**
+ * Collapses effort variants (`gemini-4-neon-low` … `gemini-4-neon-xhigh`) into one model per
+ * family whose effort levels are the variants, so the picker shows "Gemini 4 Neon" with an effort
+ * control instead of four separate models. Keeps catalog order by first appearance. A family with
+ * a single variant (`gpt-oss-120b-medium`) stays as its full id with no effort control.
+ */
+export function groupAntigravityVariants(entries: AntigravityModelEntry[]): AntigravityModelChoice[] {
+  type Slot = { id: string; levels: string[]; contextLength?: number };
+  const slots = new Map<string, Slot>();
+  for (const entry of entries) {
+    const match = entry.id.match(VARIANT_SUFFIX);
+    const key = match ? entry.id.slice(0, -match[0].length) : entry.id;
+    const slot = slots.get(key) ?? { id: entry.id, levels: [] };
+    if (match && !slot.levels.includes(match[1])) slot.levels.push(match[1]);
+    if (entry.contextLength) slot.contextLength = Math.max(slot.contextLength ?? 0, entry.contextLength);
+    slots.set(key, slot);
+  }
+  return [...slots.entries()].map(([base, slot]) =>
+    slot.levels.length > 1
+      ? {
+          id: base,
+          efforts: [...slot.levels].sort((a, b) => VARIANT_LEVELS.indexOf(a) - VARIANT_LEVELS.indexOf(b)),
+          ...(slot.contextLength ? { contextLength: slot.contextLength } : {}),
+        }
+      : { id: slot.id, ...(slot.contextLength ? { contextLength: slot.contextLength } : {}) }
+  );
+}
+
+export type AntigravityModelCandidate = { model: string; level?: string; variant: boolean };
+
+/**
+ * The catalog ids to request for a picked model and effort, in the order to try them, with the
+ * thinking level each implies. A grouped family maps to its variant id; an id that already names
+ * a variant (a selection saved before grouping) is used as-is; a plain model keeps its id and
+ * takes the effort as a thinking level. Later candidates are only tried after a 404, e.g. for a
+ * family id typed by hand without an effort.
+ */
+export function antigravityModelCandidates(model: string, effort?: string): AntigravityModelCandidate[] {
+  const match = model.match(VARIANT_SUFFIX);
+  if (match) return [{ model, level: match[1], variant: true }];
+  if (effort) {
+    return [
+      { model: `${model}-${effort}`, level: effort, variant: true },
+      { model, level: effort, variant: false },
+    ];
+  }
+  return [
+    { model, variant: false },
+    { model: `${model}-medium`, level: 'medium', variant: true },
+    { model: `${model}-high`, level: 'high', variant: true },
+  ];
+}
+
 /**
  * Parses `v1internal:retrieveUserQuotaSummary` — the pooled limits the Antigravity UI shows:
  * groups like "Gemini Models" and "Claude and GPT models", each with a `5h` and a `weekly` bucket.

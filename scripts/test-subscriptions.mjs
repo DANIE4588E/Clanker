@@ -625,9 +625,19 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
   let reasoning = '';
   let sseBody;
 
+  // Per-request failure rules: ids the server doesn't know (404) and configs it rejects (400).
+  let unknownModels = new Set();
+  let rejectsConfig = () => false;
   const mockFetch = async (url, init) => {
-    seen.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined, ua: init?.headers?.['User-Agent'] });
+    const body = init?.body ? JSON.parse(init.body) : undefined;
+    seen.push({ url: String(url), body, ua: init?.headers?.['User-Agent'] });
     if (sseBody instanceof Error) throw sseBody;
+    if (body && unknownModels.has(body.model)) {
+      return { ok: false, status: 404, statusText: 'Not Found', text: async () => '{"error":{"message":"Requested entity was not found."}}' };
+    }
+    if (body && rejectsConfig(body.request?.generationConfig)) {
+      return { ok: false, status: 400, statusText: 'Bad Request', text: async () => '{"error":{"message":"Invalid thinking level"}}' };
+    }
     if (sseBody.status) {
       return { ok: false, status: sseBody.status, statusText: 'Too Many Requests', text: async () => sseBody.text };
     }
@@ -651,8 +661,20 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
     CLOUDCODE_HOSTS: [...cc.CLOUDCODE_HOSTS],
     buildAntigravityEnvelope: cc.buildAntigravityEnvelope,
     parseAntigravityRetryMs: cc.parseAntigravityRetryMs,
+    groupAntigravityVariants: cc.groupAntigravityVariants,
+    antigravityModelCandidates: cc.antigravityModelCandidates,
     bootstrapAntigravityProject: async () => ({ projectId: 'proj-live', planLabel: 'Ultra' }),
-    fetchAntigravityModels: async () => [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', contextLength: 1_000_000 }],
+    // Live catalog shape: effort variants, a single-variant model, and a plain model.
+    fetchAntigravityModels: async () => [
+      { id: 'gemini-4-neon-high', displayName: 'Gemini 4 Neon (High)', contextLength: 1_048_576 },
+      { id: 'gemini-4-neon-xhigh', displayName: 'Gemini 4 Neon (XHigh)', contextLength: 1_048_576 },
+      { id: 'gemini-4-neon-medium', displayName: 'Gemini 4 Neon (Medium)', contextLength: 1_048_576 },
+      { id: 'gemini-4-neon-low', displayName: 'Gemini 4 Neon (Low)', contextLength: 1_048_576 },
+      { id: 'claude-opus-5-5-low', displayName: 'Claude Opus 5.5 (Low)', contextLength: 1_000_000 },
+      { id: 'claude-opus-5-5-high', displayName: 'Claude Opus 5.5 (High)', contextLength: 1_000_000 },
+      { id: 'gpt-oss-120b-medium', displayName: 'GPT-OSS 120B (Medium)', contextLength: 131_072 },
+      { id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', contextLength: 1_000_000 },
+    ],
     getValidCredentials: async () => ({ accessToken: 'ya29.tok', refreshToken: '1//rt' }),
     randomUuid: () => 'uuid-fixed',
     subscriptionAuth: { set: async (_ep, creds, acc) => persist.push({ slot: `${_ep}:${acc}`, projectId: creds.accountId, plan: creds.plan }) },
@@ -673,8 +695,8 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
 
   const result = await ag.antigravity.stream({
     endpoint,
-    model: 'gemini-3-pro',
-    effort: 'high',
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
     messages: [{ role: 'user', text: 'hello', images: [] }],
     onToken: (t) => {
       reply += t;
@@ -696,8 +718,40 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
   assert.match(streamReq.body.user_prompt_id, /^[0-9a-f-]{36}$/);
   assert.equal(streamReq.ua, cc.ANTIGRAVITY_USER_AGENT);
   assert.equal(streamReq.body.request.contents[0].parts[0].text, 'hello');
+  // The grouped model + effort becomes the variant id, with thoughts requested at that level.
+  assert.equal(streamReq.body.model, 'gemini-4-neon-xhigh');
+  assert.deepEqual(streamReq.body.request.generationConfig, { thinkingConfig: { includeThoughts: true, thinkingLevel: 'XHIGH' } });
   // project + plan persisted after bootstrap
   assert.deepEqual(persist, [{ slot: 'ep_ag:acc_1', projectId: 'proj-live', plan: 'Ultra' }]);
+
+  const okBody = 'data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}}\n\n';
+  const streamOnce = async (model, effort) => {
+    seen.length = 0;
+    await ag.antigravity.stream({ endpoint, model, effort, messages: [{ role: 'user', text: 'hi', images: [] }], onToken: () => {} });
+    return seen.map((s) => [s.body.model, s.body.request.generationConfig ?? null]);
+  };
+  sseBody = okBody;
+
+  // A variant id saved before grouping is still sent as-is, at its own level.
+  assert.deepEqual(await streamOnce('gemini-4-neon-high'), [
+    ['gemini-4-neon-high', { thinkingConfig: { includeThoughts: true, thinkingLevel: 'HIGH' } }],
+  ]);
+  // A plain model with no effort still asks for thoughts — without it Google withholds them.
+  assert.deepEqual(await streamOnce('gemini-3-pro'), [['gemini-3-pro', { thinkingConfig: { includeThoughts: true } }]]);
+  // A plain model with an effort: the variant id 404s, so it falls back to the Gemini thinking level.
+  unknownModels = new Set(['gemini-3-pro-high']);
+  assert.deepEqual(await streamOnce('gemini-3-pro', 'high'), [
+    ['gemini-3-pro-high', { thinkingConfig: { includeThoughts: true, thinkingLevel: 'HIGH' } }],
+    ['gemini-3-pro', { thinkingConfig: { thinkingLevel: 'high', includeThoughts: true } }],
+  ]);
+  unknownModels = new Set();
+  // A rejected thinking level is retried asking only for thoughts, keeping them on.
+  rejectsConfig = (cfg) => Boolean(cfg?.thinkingConfig?.thinkingLevel);
+  assert.deepEqual(await streamOnce('claude-opus-5-5', 'high'), [
+    ['claude-opus-5-5-high', { thinkingConfig: { includeThoughts: true, thinkingLevel: 'HIGH' } }],
+    ['claude-opus-5-5-high', { thinkingConfig: { includeThoughts: true } }],
+  ]);
+  rejectsConfig = () => false;
 
   // 429 body countdown becomes retryAfterMs for the account cooldown.
   sseBody = { status: 429, text: JSON.stringify({ error: { message: '429 Quota exceeded. Your quota will reset after 2h7m23s.' } }) };
@@ -717,6 +771,12 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
   );
 
   const models = await ag.antigravity.listModels(endpoint);
-  // gemini-3-pro style models get the two-level thinking ladder, same as the Gemini API.
-  assert.deepEqual(models.models, [{ id: 'gemini-3-pro', efforts: ['low', 'high'], contextLength: 1_000_000 }]);
+  // Effort variants collapse into one model per family, levels lowest first; a single variant
+  // keeps its full id; a plain gemini-3-pro gets the two-level ladder, same as the Gemini API.
+  assert.deepEqual(models.models, [
+    { id: 'gemini-4-neon', efforts: ['low', 'medium', 'high', 'xhigh'], contextLength: 1_048_576 },
+    { id: 'claude-opus-5-5', efforts: ['low', 'high'], contextLength: 1_000_000 },
+    { id: 'gpt-oss-120b-medium', contextLength: 131_072 },
+    { id: 'gemini-3-pro', efforts: ['low', 'high'], contextLength: 1_000_000 },
+  ]);
 });

@@ -2,13 +2,17 @@ import { uid } from '../storage';
 import {
   ANTIGRAVITY_USER_AGENT,
   ANTIGRAVITY_VERSION,
+  antigravityModelCandidates,
   bootstrapAntigravityProject,
   buildAntigravityEnvelope,
   CLOUDCODE_HOSTS,
   fetchAntigravityModels,
   getValidCredentials,
+  groupAntigravityVariants,
   parseAntigravityRetryMs,
   subscriptionAuth,
+  type AntigravityModelCandidate,
+  type AntigravityModelEntry,
   type SubscriptionCredentials,
 } from '../subscriptions';
 import { fetch } from '@/lib/net';
@@ -18,8 +22,27 @@ import { ProviderError, readSSE } from './http';
 import { withSubscriptionAccount } from './subscriptionRoute';
 import type { Endpoint, ModelInfo, ProviderAdapter, StreamUsage, ToolCall, ToolSpec, WireMessage } from './types';
 
+/** Catalog entries → picker models: effort variants grouped into one model with effort levels. */
+function toModelInfos(entries: AntigravityModelEntry[]): ModelInfo[] {
+  return groupAntigravityVariants(entries).map((m) => {
+    const efforts = m.efforts ?? guessEfforts('antigravity', m.id);
+    return { id: m.id, ...(efforts ? { efforts } : {}), ...(m.contextLength ? { contextLength: m.contextLength } : {}) };
+  });
+}
+
+/**
+ * Thinking config for a request. Always asks for thoughts: without `includeThoughts` the models
+ * still think but Google withholds the text. Variant ids take their level in upper case, the way
+ * agy sends it; a plain model with an effort uses the regular Gemini mapping.
+ */
+function thinkingFor(model: string, candidate: AntigravityModelCandidate) {
+  if (candidate.variant && candidate.level) return { includeThoughts: true, thinkingLevel: candidate.level.toUpperCase() };
+  if (candidate.level) return thinkingConfig(model, candidate.level);
+  return { includeThoughts: true };
+}
+
 // The "Recommended" catalog agy 1.5.17 showed (Nov 2026), used when fetchAvailableModels is unreachable.
-const FALLBACK_MODELS: ModelInfo[] = [
+const FALLBACK_MODELS: ModelInfo[] = toModelInfos([
   'gemini-4-neon-high',
   'gemini-4-neon-xhigh',
   'gemini-4-neon-medium',
@@ -40,7 +63,7 @@ const FALLBACK_MODELS: ModelInfo[] = [
   'claude-sonnet-5-5-low',
   'claude-sonnet-5-5-medium',
   'claude-sonnet-5-5-high',
-].map((id) => ({ id, efforts: guessEfforts('antigravity', id), contextLength: 1_048_576 }));
+].map((id) => ({ id, contextLength: 1_048_576 })));
 
 async function ensureProject(
   endpoint: Endpoint,
@@ -55,11 +78,10 @@ async function ensureProject(
 }
 
 function buildRequest(
-  model: string,
   messages: WireMessage[],
   system: string | undefined,
-  effort: string | undefined,
-  tools: ToolSpec[] | undefined
+  tools: ToolSpec[] | undefined,
+  generationConfig: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   return {
     contents: messages.map(toGemini),
@@ -77,7 +99,7 @@ function buildRequest(
           ],
         }
       : {}),
-    ...(effort ? { generationConfig: { thinkingConfig: thinkingConfig(model, effort) } } : {}),
+    ...(generationConfig ? { generationConfig } : {}),
   };
 }
 
@@ -119,12 +141,7 @@ export const antigravity: ProviderAdapter = {
         const creds = await getValidCredentials(endpoint, { accountId: account.id, forceRefresh });
         try {
           const projectId = await ensureProject(endpoint, account, creds);
-          const entries = await fetchAntigravityModels(creds.accessToken, projectId);
-          return entries.map((entry) => ({
-            id: entry.id,
-            efforts: guessEfforts('antigravity', entry.id),
-            ...(entry.contextLength ? { contextLength: entry.contextLength } : {}),
-          }));
+          return toModelInfos(await fetchAntigravityModels(creds.accessToken, projectId));
         } catch (e) {
           if (e instanceof ProviderError && e.status === 401 && !forceRefresh && creds.refreshToken) return run(true);
           if (e instanceof ProviderError && (e.status === 401 || e.status === 429)) throw e;
@@ -161,9 +178,10 @@ export const antigravity: ProviderAdapter = {
       const run = async (forceRefresh: boolean): Promise<{ toolCalls: ToolCall[]; usage?: StreamUsage }> => {
         const creds = await getValidCredentials(endpoint, { accountId: account.id, forceRefresh });
         const projectId = await ensureProject(endpoint, account, creds);
-        const request = buildRequest(model, messages, system, effort, tools);
 
         // Walks the host mirrors; only falls through to the next host when nothing has streamed yet.
+        // A 404 is not mirrored: on the live host it means "no such model", which the candidate loop
+        // below handles, and prod would only answer with an unrelated error.
         const open = async (envelope: Record<string, unknown>) => {
           let res: Awaited<ReturnType<typeof streamFrom>> | null = null;
           let lastError: unknown;
@@ -174,8 +192,7 @@ export const antigravity: ProviderAdapter = {
             } catch (e) {
               lastError = e;
               const mirrorable =
-                started === false &&
-                (!(e instanceof ProviderError) || e.status === 404 || e.status === 429 || (e.status ?? 0) >= 500);
+                started === false && (!(e instanceof ProviderError) || e.status === 429 || (e.status ?? 0) >= 500);
               if (!mirrorable || host === CLOUDCODE_HOSTS[CLOUDCODE_HOSTS.length - 1]) throw e;
             }
           }
@@ -183,17 +200,36 @@ export const antigravity: ProviderAdapter = {
           return res;
         };
 
-        let res: Awaited<ReturnType<typeof streamFrom>>;
-        try {
-          res = await open(buildAntigravityEnvelope(model, projectId, request));
-        } catch (e) {
-          if (e instanceof ProviderError && e.status === 401 && !forceRefresh && creds.refreshToken) return run(true);
-          // Some catalog models reject thinkingConfig with 400; retry once without it.
-          if (e instanceof ProviderError && e.status === 400 && request.generationConfig) {
-            const { generationConfig: _drop, ...bare } = request;
-            res = await open(buildAntigravityEnvelope(model, projectId, bare));
-          } else throw e;
+        // Tries each concrete model id for the picked model + effort (see antigravityModelCandidates),
+        // moving on only when the server says the id doesn't exist. Within one id, a 400 means the
+        // thinking config was rejected: retry asking only for thoughts, then with no config at all.
+        let res: Awaited<ReturnType<typeof streamFrom>> | undefined;
+        let lastError: unknown;
+        for (const candidate of antigravityModelCandidates(model, effort)) {
+          const configs: (Record<string, unknown> | undefined)[] = [
+            { thinkingConfig: thinkingFor(candidate.model, candidate) },
+            { thinkingConfig: { includeThoughts: true } },
+            undefined,
+          ];
+          try {
+            for (let i = 0; i < configs.length; i++) {
+              const request = buildRequest(messages, system, tools, configs[i]);
+              try {
+                res = await open(buildAntigravityEnvelope(candidate.model, projectId, request));
+                break;
+              } catch (e) {
+                const rejected = e instanceof ProviderError && e.status === 400 && i < configs.length - 1;
+                if (!rejected) throw e;
+              }
+            }
+            if (res) break;
+          } catch (e) {
+            if (e instanceof ProviderError && e.status === 401 && !forceRefresh && creds.refreshToken) return run(true);
+            if (!(e instanceof ProviderError && e.status === 404) || started) throw e;
+            lastError = e;
+          }
         }
+        if (!res) throw lastError instanceof Error ? lastError : new ProviderError('Antigravity request failed', 0);
 
         const toolCalls: ToolCall[] = [];
         let usage: StreamUsage | undefined;
