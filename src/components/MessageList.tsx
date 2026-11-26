@@ -65,6 +65,12 @@ const LIST_FOOTER = <View style={{ height: 1 }} />;
 // single shift still treated as a line wrap rather than a snap.
 const MAX_GLIDE_LAG = 36;
 const MAX_GLIDE_JUMP = 120;
+// Cells this far past the bottom of the screen move without a glide: no one sees them, and in a
+// long chat starting an animation for each of them on every line wrap took frames from the stream.
+const GLIDE_MARGIN = 200;
+// Screens of messages kept rendered (half each way); each one rendered is laid out again as a reply
+// grows above it. The default of 21 kept far more than scrolling needs.
+const WINDOW_SIZE = 9;
 
 const CellLayoutContext = createContext<LayoutAnimationFunction | null>(null);
 
@@ -162,6 +168,8 @@ export const MessageList = memo(function MessageList({
   const draggingSV = useSharedValue(false);
   const streamingSV = useSharedValue(isStreaming);
   const reduceMotionSV = useSharedValue(reduceMotion);
+  // The list's height, for telling which cells are on screen.
+  const viewportSV = useSharedValue(0);
 
   useEffect(() => {
     streamingSV.set(isStreaming);
@@ -186,6 +194,11 @@ export const MessageList = memo(function MessageList({
         return { initialValues: {}, animations: {} };
       }
       if (Math.abs(values.targetWidth - values.currentWidth) > 0.5) {
+        return { initialValues: {}, animations: {} };
+      }
+      // Pinned, the list sits at offset 0, so its screen is the first `viewport` of its content.
+      const viewport = viewportSV.get();
+      if (viewport > 0 && values.currentOriginY > viewport + GLIDE_MARGIN) {
         return { initialValues: {}, animations: {} };
       }
       // current* is the in-flight animated frame when a glide is interrupted, so topJump already
@@ -214,7 +227,7 @@ export const MessageList = memo(function MessageList({
         },
       };
     },
-    [draggingSV, pinnedSV, reduceMotionSV, streamingSV],
+    [draggingSV, pinnedSV, reduceMotionSV, streamingSV, viewportSV],
   );
 
   const deferredRef = useRef(false);
@@ -350,9 +363,10 @@ export const MessageList = memo(function MessageList({
 
   const onLayout = useCallback(
     (e: LayoutChangeEvent) => {
-      outerLayoutH.set(e.nativeEvent.layout.height);
+      viewportSV.set(e.nativeEvent.layout.height);
+      if (useJsScrollRelay) outerLayoutH.set(e.nativeEvent.layout.height);
     },
-    [outerLayoutH],
+    [outerLayoutH, viewportSV],
   );
 
   const jumpToBottom = useCallback(() => {
@@ -515,6 +529,7 @@ export const MessageList = memo(function MessageList({
             // siblings from contentView and leaves MaintainVisibleScrollPositionHelper with no
             // anchor above a streaming message taller than one viewport.
             removeClippedSubviews={false}
+            windowSize={WINDOW_SIZE}
             maintainVisibleContentPosition={pinnedToBottom ? MAINTAIN_AT_BOTTOM : MAINTAIN_SCROLLED_UP}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
@@ -533,7 +548,7 @@ export const MessageList = memo(function MessageList({
             bounces={!pullEnabled}
             overScrollMode={pullEnabled ? 'never' : 'auto'}
             onContentSizeChange={useJsScrollRelay ? onContentSizeChange : undefined}
-            onLayout={useJsScrollRelay ? onLayout : undefined}
+            onLayout={onLayout}
             scrollEventThrottle={16}
           />
           </GestureDetector>

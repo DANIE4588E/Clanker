@@ -35,9 +35,15 @@ function legacySources(part: ToolPart): Source[] {
   return [...output.matchAll(/^\d+\. (.+)\n {3}(https?:\/\/\S+)/gm)].map((m) => ({ title: m[1], url: m[2] }));
 }
 
-function sourcesOfPart(part: ToolPart) {
+// Parts are replaced rather than changed, so what was read off one holds while a reply streams on.
+const partSources = new WeakMap<ToolPart, Source[]>();
+
+function sourcesOfPart(part: ToolPart): Source[] {
   if (part.name !== 'web_search' && part.name !== 'web_fetch') return [];
-  return part.sources ?? legacySources(part);
+  if (part.sources) return part.sources;
+  let sources = partSources.get(part);
+  if (!sources) partSources.set(part, (sources = legacySources(part)));
+  return sources;
 }
 
 /**

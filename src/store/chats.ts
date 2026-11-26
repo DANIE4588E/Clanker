@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import { deleteAttachment } from '@/lib/attachments';
 import type { AttachmentPart, ContentPart, Role, ToolPart } from '@/lib/providers';
-import { jsonFileStorage, uid } from '@/lib/storage';
+import { splitJsonFileStorage, uid } from '@/lib/storage';
 import { chatWorkspace } from '@/lib/workspace';
 import type { Memory } from './memory';
 import type { SkillRef } from './skills';
@@ -219,6 +219,11 @@ interface ChatsState {
   patchTool: (id: string, messageId: string, toolId: string, patch: Partial<ToolPart>) => void;
   /** Updates tool calls still being written in place, by id, and appends the ones that are new. */
   putDrafts: (id: string, messageId: string, drafts: ToolPart[]) => void;
+  /**
+   * What a reply streamed since the last update, in one store update rather than one per kind:
+   * thinking, then text, then the calls still being written (as appendReasoning, appendText and putDrafts).
+   */
+  appendStream: (id: string, messageId: string, chunk: { reasoning?: string; text?: string; drafts?: ToolPart[] }) => void;
   /** Replaces the calls still being written with `parts`, where the first of them was. */
   settleDrafts: (id: string, messageId: string, parts: ContentPart[]) => void;
   setCompressions: (id: string, blocks: CompressionBlock[]) => void;
@@ -251,6 +256,31 @@ interface ChatsState {
 /** A tool call the model is still writing. */
 function isDraft(part: ContentPart): boolean {
   return part.type === 'tool' && part.status === 'writing';
+}
+
+function withText(content: ContentPart[], text: string): ContentPart[] {
+  const last = content[content.length - 1];
+  return last?.type === 'text'
+    ? [...content.slice(0, -1), { ...last, text: last.text + text }]
+    : [...content, { type: 'text', text, at: Date.now() }];
+}
+
+function withReasoning(content: ContentPart[], text: string): ContentPart[] {
+  const last = content[content.length - 1];
+  return last?.type === 'thought' && last.ms == null
+    ? [...content.slice(0, -1), { ...last, text: last.text + text }]
+    : [...content, { type: 'thought', text }];
+}
+
+function withDrafts(content: ContentPart[], drafts: ToolPart[]): ContentPart[] {
+  const byId = new Map(drafts.map((d) => [d.id, d]));
+  const next = content.map((p) => {
+    const draft = p.type === 'tool' && isDraft(p) && byId.get(p.id);
+    if (!draft) return p;
+    byId.delete(draft.id);
+    return draft;
+  });
+  return [...next, ...byId.values()];
 }
 
 /** Every message in the chat, the versions hidden behind its forks included. */
@@ -358,20 +388,19 @@ export const useChats = create<ChatsState>()(
           return messageId;
         },
         updateMessage: (id, messageId, patch) => patchMessage(id, messageId, () => patch),
-        appendText: (id, messageId, text) =>
-          patchMessage(id, messageId, (m) => {
-            const last = m.content[m.content.length - 1];
-            return last?.type === 'text'
-              ? { content: [...m.content.slice(0, -1), { ...last, text: last.text + text }] }
-              : { content: [...m.content, { type: 'text', text, at: Date.now() }] };
-          }),
+        appendText: (id, messageId, text) => patchMessage(id, messageId, (m) => ({ content: withText(m.content, text) })),
         appendReasoning: (id, messageId, text) =>
+          patchMessage(id, messageId, (m) => ({ content: withReasoning(m.content, text) })),
+        appendStream: (id, messageId, { reasoning, text, drafts }) => {
+          if (!reasoning && !text && !drafts?.length) return;
           patchMessage(id, messageId, (m) => {
-            const last = m.content[m.content.length - 1];
-            return last?.type === 'thought' && last.ms == null
-              ? { content: [...m.content.slice(0, -1), { ...last, text: last.text + text }] }
-              : { content: [...m.content, { type: 'thought', text }] };
-          }),
+            let content = m.content;
+            if (reasoning) content = withReasoning(content, reasoning);
+            if (text) content = withText(content, text);
+            if (drafts?.length) content = withDrafts(content, drafts);
+            return { content };
+          });
+        },
         finishThought: (id, messageId, ms) =>
           patchMessage(id, messageId, (m) => {
             const index = m.content.findLastIndex((p) => p.type === 'thought');
@@ -382,17 +411,7 @@ export const useChats = create<ChatsState>()(
           patchMessage(id, messageId, (m) => ({
             content: m.content.map((p) => (p.type === 'tool' && p.id === toolId ? { ...p, ...patch } : p)),
           })),
-        putDrafts: (id, messageId, drafts) =>
-          patchMessage(id, messageId, (m) => {
-            const byId = new Map(drafts.map((d) => [d.id, d]));
-            const content = m.content.map((p) => {
-              const draft = p.type === 'tool' && isDraft(p) && byId.get(p.id);
-              if (!draft) return p;
-              byId.delete(draft.id);
-              return draft;
-            });
-            return { content: [...content, ...byId.values()] };
-          }),
+        putDrafts: (id, messageId, drafts) => patchMessage(id, messageId, (m) => ({ content: withDrafts(m.content, drafts) })),
         settleDrafts: (id, messageId, parts) =>
           patchMessage(id, messageId, (m) => {
             const first = m.content.findIndex(isDraft);
@@ -466,7 +485,8 @@ export const useChats = create<ChatsState>()(
     },
     {
       name: 'chats',
-      storage: jsonFileStorage,
+      // A file per chat, so saving while a reply streams writes that chat rather than every one.
+      storage: splitJsonFileStorage('conversations'),
       partialize: (s) => ({ conversations: s.conversations }),
       version: 2,
       // v0 chats all worked in one shared workspace; they keep it, while new chats get their own.

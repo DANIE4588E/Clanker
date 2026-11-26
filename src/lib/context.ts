@@ -59,11 +59,23 @@ function userTokens(m: Message) {
   return n;
 }
 
+// The history is counted again for the context meter and at every step of a reply, and a long one
+// holds hundreds of calls whose input (often a whole written file) would be serialized each time.
+// Parts are replaced rather than changed, so each call's count holds for as long as it does.
+const callTokenCache = new WeakMap<ToolPart, number>();
+
+function callTokens(c: ToolPart) {
+  let n = callTokenCache.get(c);
+  if (n == null) {
+    n = tokensOf(JSON.stringify(c.input)) + tokensOf(c.output ?? '') + (c.images?.length ?? 0) * IMAGE_TOKENS + 20;
+    callTokenCache.set(c, n);
+  }
+  return n;
+}
+
 function stepTokens(text: string, calls: ToolPart[]) {
   let n = tokensOf(text);
-  for (const c of calls) {
-    n += tokensOf(JSON.stringify(c.input)) + tokensOf(c.output ?? '') + (c.images?.length ?? 0) * IMAGE_TOKENS + 20;
-  }
+  for (const c of calls) n += callTokens(c);
   return n;
 }
 

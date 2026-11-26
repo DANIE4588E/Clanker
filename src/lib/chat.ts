@@ -504,16 +504,12 @@ async function runCompletion(id: string, opts?: { resumeMessageId?: string; bran
   const flush = () => {
     if (timer) clearTimeout(timer);
     timer = null;
-    const chats = useChats.getState();
-    if (reasoningBuffer) chats.appendReasoning(id, replyId, reasoningBuffer);
-    if (buffer) chats.appendText(id, replyId, buffer);
-    if (changedDrafts.size) {
-      const parts = [...changedDrafts].map((index): ToolPart => {
-        const { draft, partId } = drafts.get(index)!;
-        return { type: 'tool', id: partId, name: draft.name, input: draftInput(draft.args), status: 'writing' };
-      });
-      chats.putDrafts(id, replyId, parts);
-    }
+    const parts = [...changedDrafts].map((index): ToolPart => {
+      const { draft, partId } = drafts.get(index)!;
+      return { type: 'tool', id: partId, name: draft.name, input: draftInput(draft.args), status: 'writing' };
+    });
+    // One store update for all of it, so the chat renders once per flush rather than once per kind.
+    useChats.getState().appendStream(id, replyId, { reasoning: reasoningBuffer, text: buffer, drafts: parts });
     buffer = '';
     reasoningBuffer = '';
     changedDrafts.clear();

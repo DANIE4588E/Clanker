@@ -301,6 +301,9 @@ export function applyFadeToNodes<T extends ReactNode>(
 
 const EMPTY_RUNS: FadeRun[] = [];
 
+/** How often a fade steps forward: about 30 times a second. */
+const FADE_FRAME_MS = 32;
+
 type StreamFadeOptions = {
   /** Whether text already present on mount should fade in when mounted live (default true). */
   fadeInitial?: boolean;
@@ -346,12 +349,19 @@ export function useStreamFade(
   useEffect(() => {
     if (!animating) return;
     let rafId = 0;
+    let last = 0;
     const step = () => {
       const t = monotonicNow();
       if (t >= endAtRef.current) {
         setState((s) => pruneFadeState(s, t));
+        last = t;
+        setNow(t);
+      } else if (t - last >= FADE_FRAME_MS) {
+        // Each step re-renders the block and lays its text out again, and while a reply streams
+        // there is always something fading: every other frame looks the same and costs half.
+        last = t;
+        setNow(t);
       }
-      setNow(t);
       rafId = requestAnimationFrame(step);
     };
     rafId = requestAnimationFrame(step);

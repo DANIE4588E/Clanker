@@ -114,6 +114,8 @@ function highlight(code: string, language?: string): Root | null {
   return null;
 }
 
+const FADE_MAX = 4000;
+
 const LIVE_LINES = 20;
 // Nor more characters than this, for code with very long lines.
 const LIVE_CHARS = 2000;
@@ -194,7 +196,9 @@ function CodeBlockInner({
     () => (live ? [tail(text)] : [highlighted, trailing]),
     [live, text, highlighted, trailing]
   );
-  const fadedBody = useFadeNodes(bodyNodes, !live && streaming, palette.base, { text });
+  // Fading lays the whole block out again many times a second, which long code can't afford: past
+  // FADE_MAX its new lines just appear.
+  const fadedBody = useFadeNodes(bodyNodes, !live && streaming && text.length <= FADE_MAX, palette.base, { text });
 
   const copy = async () => {
     await Clipboard.setStringAsync(text);

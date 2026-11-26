@@ -140,10 +140,10 @@ type Segment =
   | { kind: 'thought'; text: string; ms?: number };
 
 /** Runs of text merged into one markdown block, with thoughts and tool calls between them, in reply order. */
-function segmentsOf(message: Message): Segment[] {
+function segmentsOf(content: ContentPart[], reasoning?: string, thoughtMs?: number): Segment[] {
   // Replies saved before thoughts were content parts keep theirs in one block at the top.
-  const out: Segment[] = message.reasoning ? [{ kind: 'thought', text: message.reasoning, ms: message.thoughtMs }] : [];
-  for (const part of message.content) {
+  const out: Segment[] = reasoning ? [{ kind: 'thought', text: reasoning, ms: thoughtMs }] : [];
+  for (const part of content) {
     const last = out[out.length - 1];
     if (part.type === 'text') {
       if (last?.kind === 'text') last.text += part.text;
@@ -261,7 +261,11 @@ function Work({
 }) {
   const { colors } = useTheme();
   const elapsed = useElapsed(since, working);
-  const { sites, searched } = useMemo(() => sitesOf(content), [content]);
+  // Worked out again as the reply streams, but handed on only when the sites change.
+  const found = sitesOf(content);
+  const siteKey = `${found.searched}:${found.sites.map((s) => s.host).join(' ')}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const { sites, searched } = useMemo(() => found, [siteKey]);
   const label = working ? `Working for ${duration(elapsed)}` : `Worked for ${duration(ms)}`;
   return (
     <>
@@ -347,7 +351,17 @@ const ThoughtChunk = memo(function ThoughtChunk({
  * One stretch of the model's thinking: a "Thought for Ns" pill that shows or hides the text.
  * Folded while it streams, the pill is followed by the newest of it on one line.
  */
-function Thoughts({ text, ms, live, keepOpen }: { text: string; ms?: number; live: boolean; keepOpen: boolean }) {
+const Thoughts = memo(function Thoughts({
+  text,
+  ms,
+  live,
+  keepOpen,
+}: {
+  text: string;
+  ms?: number;
+  live: boolean;
+  keepOpen: boolean;
+}) {
   const { colors } = useTheme();
   // Expanded while it streams, or for good when `keepOpen`; a tap pins the choice either way.
   const [openOverride, setOpenOverride] = useState<boolean | null>(null);
@@ -381,7 +395,7 @@ function Thoughts({ text, ms, live, keepOpen }: { text: string; ms?: number; liv
       {!open && live && <CurrentStep seg={{ kind: 'thought', text }} onPress={() => setOpenOverride(true)} />}
     </>
   );
-}
+});
 
 function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onEdit, onBranch, busy }: Props) {
   const { colors } = useTheme();
@@ -401,9 +415,24 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   // Find in chat's matches, marked in the user's text (replies mark theirs in Markdown).
   const mark = useFindMarker();
   const stats = formatStats(message.stats, { speed: showSpeed, cache: showCache });
-  const text = messageText(message);
-  const images = message.content.filter((p): p is ImagePart => p.type === 'image');
-  const files = message.content.filter((p): p is FilePart => p.type === 'file');
+  // A reply that worked for long has hundreds of parts, and it renders again with every streamed
+  // token: what's read off its parts is worked out again only when they change.
+  const { content, reasoning, thoughtMs } = message;
+  const assistant = message.role === 'assistant';
+  const parts = useMemo(() => {
+    const tools = content.filter((p): p is ToolPart => p.type === 'tool');
+    return {
+      text: messageText({ content }),
+      images: content.filter((p): p is ImagePart => p.type === 'image'),
+      files: content.filter((p): p is FilePart => p.type === 'file'),
+      segments: assistant ? segmentsOf(content, reasoning, thoughtMs) : [],
+      // Questions waiting on the user show under the work rather than in it, where folding could hide them.
+      asking: tools.filter((p) => p.name === 'ask_user' && p.status === 'running'),
+      // A plan being written or waiting for approval shows there too; once decided it folds into the work.
+      planning: tools.filter((p) => p.name === 'exit_plan_mode' && (p.status === 'writing' || p.status === 'running')),
+    };
+  }, [content, reasoning, thoughtMs, assistant]);
+  const { text, images, files, segments, asking, planning } = parts;
 
   const copy = async () => {
     await Clipboard.setStringAsync(text);
@@ -477,7 +506,6 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   }
 
   const streaming = message.status === 'streaming';
-  const segments = segmentsOf(message);
   const lastSeg = segments[segments.length - 1];
   // A bare pulsing pill while the model is working with nothing streaming yet: before its first
   // token, and while it works out its next step after a round of tool calls. Streamed thoughts
@@ -514,14 +542,6 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const sources = message.status === 'done' ? sourcesOf(message.content) : [];
   // Gathered at the end of the turn, since the calls that made them fold away with the work.
   const made = streaming ? [] : filesOf(message.content);
-
-  // Questions waiting on the user show under the work rather than in it, where folding could hide them.
-  const asking = message.content.filter((p): p is ToolPart => p.type === 'tool' && p.name === 'ask_user' && p.status === 'running');
-
-  // A plan being written or waiting for approval shows there too; once decided it folds into the work.
-  const planning = message.content.filter(
-    (p): p is ToolPart => p.type === 'tool' && p.name === 'exit_plan_mode' && (p.status === 'writing' || p.status === 'running')
-  );
 
   const render = (seg: Segment, i: number) =>
     seg.kind === 'tool' ? (
@@ -606,7 +626,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           </Text>
         </Pressable>
       )}
-      {!!made.length && <TurnFiles files={made} text={messageText(message)} />}
+      {!!made.length && <TurnFiles files={made} text={text} />}
       {!onRegenerate && <RemoteReply chatId={conversationId} reply={message.remote} reconnect={!!message.error} />}
       {message.error && message.status !== 'error' && <Text style={{ color: colors.textSecondary }}>{message.error}</Text>}
 
