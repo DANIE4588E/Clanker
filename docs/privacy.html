@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy · Clanker</title>
+    <meta name="description" content="How Clanker handles your data, including data from Google and other connected services." />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <a class="brand" href="./">Clanker</a>
+        <nav>
+          <a href="./">Home</a>
+          <a href="privacy.html" aria-current="page">Privacy</a>
+          <a href="terms.html">Terms</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <h1>Privacy Policy</h1>
+      <p class="meta">Effective 27 November 2026</p>
+
+      <p>
+        Clanker is a chat app for Android and iOS. This policy explains what data the app handles, where it goes, and the choices you
+        have. In short: <strong>Clanker has no servers and no accounts.</strong> Your chats, files and sign-ins are stored on your phone,
+        and the app sends data only to the AI provider and the services you choose to connect.
+      </p>
+
+      <h2>What stays on your phone</h2>
+      <ul>
+        <li><strong>Chats, files and settings</strong> are stored in the app’s private storage on your device.</li>
+        <li>
+          <strong>API keys and sign-in tokens</strong> for AI providers and connected services are stored in your device’s secure keychain.
+        </li>
+        <li>
+          We do not collect analytics, crash reports, advertising identifiers or any other usage data, and we do not run servers that
+          receive your data.
+        </li>
+      </ul>
+
+      <h2>Where data goes</h2>
+      <h3>Your AI provider</h3>
+      <p>
+        To answer you, Clanker sends your messages, and anything an agent reads while working on your request, to the AI provider or
+        endpoint you set up in the app (for example OpenAI, Anthropic, Google Gemini, OpenRouter, or a server you run). That provider’s
+        own terms and privacy policy apply to what it receives. If you use an on-device model, this data never leaves your phone.
+      </p>
+      <h3>Services you connect (plugins)</h3>
+      <p>
+        When you add a plugin, you sign in on the service’s own page and approve the access it asks for. Clanker then talks to that service
+        directly from your phone. An agent uses a plugin only while working on a request you made in a chat. What it reads from the service
+        may be shown to your AI provider as part of that chat, and files it downloads are saved in the chat’s private workspace on your
+        phone. You can make any plugin read-only, or remove it, under <strong>Plugins</strong> in the app.
+      </p>
+      <h3>Other requests the app makes</h3>
+      <ul>
+        <li>Web searches and pages an agent opens go to the search provider or website involved.</li>
+        <li>The app checks GitHub for new versions. This request contains no personal data.</li>
+        <li>If you pair a remote agent backend that you run yourself, chats in it are sent to that device.</li>
+      </ul>
+
+      <h2 id="google">Google user data</h2>
+      <p>
+        If you connect a Google plugin, Clanker asks Google only for the access that plugin needs, and only when you add it. Clanker uses
+        this access only to do what you ask in your chats:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Plugin</th>
+            <th>Access</th>
+            <th>Used to</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gmail</td>
+            <td>Read, compose, send and organise mail</td>
+            <td>Search and summarise your mail, draft and send replies you ask for, and label, archive or trash messages you choose.</td>
+          </tr>
+          <tr>
+            <td>Google Calendar</td>
+            <td>See and edit events</td>
+            <td>Show your schedule, find free time, and create, change or cancel events you ask for.</td>
+          </tr>
+          <tr>
+            <td>Google Drive</td>
+            <td>See, edit, create and delete files</td>
+            <td>Find files, bring them into a chat, and save or organise files you ask for.</td>
+          </tr>
+          <tr>
+            <td>Google Docs, Sheets, Slides</td>
+            <td>See and edit documents, spreadsheets and presentations</td>
+            <td>Read them and make the edits or new files you ask for.</td>
+          </tr>
+          <tr>
+            <td>Google Tasks</td>
+            <td>See and edit tasks</td>
+            <td>Show, add, update and complete tasks you ask about.</td>
+          </tr>
+          <tr>
+            <td>All Google plugins</td>
+            <td>Your name and email address</td>
+            <td>Show which Google account is connected.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Google user data is fetched directly from Google to your phone. It is stored only on your phone (for example in your chats and the
+        chat’s workspace) and shared only with the AI provider you chose, as part of the chat in which you asked for it, to provide that
+        feature. Clanker does not sell Google user data, does not use or transfer it for advertising, does not use it to train or improve
+        AI or machine-learning models, and does not let any person read it. Because Clanker has no servers, nobody but you and the
+        providers you chose ever receives it.
+      </p>
+      <div class="note">
+        <p>
+          Clanker’s use and transfer to any other app of information received from Google APIs will adhere to the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the
+          Limited Use requirements.
+        </p>
+      </div>
+
+      <h2>Keeping and deleting your data</h2>
+      <ul>
+        <li>Your data stays on your phone until you delete it. Deleting a chat deletes its messages and its workspace files.</li>
+        <li>
+          Removing a plugin, or disconnecting its account in the plugin’s settings, deletes the sign-in from your phone and, where the
+          service allows it, revokes Clanker’s access.
+        </li>
+        <li>
+          You can also remove Clanker’s access to your Google account at any time at
+          <a href="https://myaccount.google.com/connections">myaccount.google.com/connections</a>.
+        </li>
+        <li>Uninstalling the app deletes everything it stored on your phone.</li>
+      </ul>
+
+      <h2>Security</h2>
+      <p>
+        Sign-ins use each service’s own page with OAuth and PKCE, tokens are kept in the device keychain, and all connections to providers
+        and services use HTTPS.
+      </p>
+
+      <h2>Children</h2>
+      <p>Clanker is not directed at children under 13, and we do not knowingly collect data from them.</p>
+
+      <h2>Changes</h2>
+      <p>If this policy changes, the new version will be posted on this page with a new effective date.</p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions about this policy: open an issue at
+        <a href="https://github.com/DANIE4588E/Clanker/issues">github.com/DANIE4588E/Clanker/issues</a>.
+      </p>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <span>Clanker</span>
+        <a href="privacy.html">Privacy policy</a>
+        <a href="terms.html">Terms of service</a>
+        <a href="https://github.com/DANIE4588E/Clanker/issues">Contact</a>
+      </div>
+    </footer>
+  </body>
+</html>
