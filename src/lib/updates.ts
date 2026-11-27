@@ -15,7 +15,7 @@ import { ClankerUpdate } from '../../modules/clanker-update';
  * is downloaded when it's there.
  */
 
-const REPOS = ['danielyongzx1/Clanker'];
+const REPOS = ['DANIE4588E/Clanker'];
 const CHECK_TIMEOUT = 15_000;
 const APK_TYPE = 'application/vnd.android.package-archive';
 // Intent.FLAG_GRANT_READ_URI_PERMISSION, so the installer can read the APK through the content URI.

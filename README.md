@@ -118,6 +118,8 @@ For a local Ollama or LM Studio server, use your computer's LAN IP (not `localho
 
 Build release APKs locally and archive them in `builds/` (named after `expo.version` in `app.json`) so Gradle rebuilds don't overwrite earlier APKs: one per CPU ABI, `clanker-<version>-<abi>.apk`, plus the universal `clanker-<version>.apk`. Attach them all to a GitHub release; the in-app updater downloads the one for the phone's ABI, else the universal one.
 
+Publish updates to [DANIE4588E/Clanker](https://github.com/DANIE4588E/Clanker/releases). To see beta releases in the app, turn on **Settings → Updates → Include pre-releases**.
+
 ```sh
 npm run build:apk
 ```
