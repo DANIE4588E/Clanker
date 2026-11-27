@@ -42,7 +42,7 @@ const BUTTON = 36;
 const TOOLBAR_PAD = 8;
 const COLLAPSED = { margin: 36, padLeft: TOOLBAR_PAD + BUTTON + 2, padRight: TOOLBAR_PAD + BUTTON + 8, padBottom: 0 };
 const EXPANDED = { margin: 12, padLeft: 16, padRight: 16, padBottom: ROW - 6 };
-const TWEEN = { duration: 280, easing: Easing.bezier(0.2, 0, 0, 1) };
+const TWEEN = { duration: 80, easing: Easing.bezier(0.2, 0, 0, 1) };
 const TOOLBAR_GAP = 4;
 // The visible space wanted between neighbouring toolbar icons once expanded. The effort gauge is
 // drawn well inside its round button while the two meters fill their boxes, so equal box gaps

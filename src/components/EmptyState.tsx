@@ -2,7 +2,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { KeyboardController, KeyboardEvents, useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
+import { KeyboardController, KeyboardEvents, useGenericKeyboardHandler, type NativeEvent } from 'react-native-keyboard-controller';
 import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { dailyTotals, useUsageEvents } from '@/lib/activity';
 import { ActivityHeatmap } from './ActivityHeatmap';
@@ -35,6 +35,7 @@ function useKeyboardUp() {
 type FittedProps = {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
+  fitFadeOutDuration?: number;
   /**
    * Fades out as the keyboard starts to rise and back in as it lands, holding still where it
    * rests rather than riding the shrinking space up and down.
@@ -42,18 +43,25 @@ type FittedProps = {
   hideWithKeyboard?: boolean;
 };
 
-/** How far into the keyboard's rise (0–1) the content is fully gone; it returns over the same stretch on the way down. */
+// Both fades use the same stretch of the keyboard's travel.
 const KEYBOARD_FADE = 0.35;
+const FIT_FADE_IN_DURATION = 220;
 
 /**
  * Takes whatever room the suggestions leave and centres its content there, fading it out
  * while it doesn't fit whole rather than letting it spill under the header and the suggestions.
  */
-function Fitted({ children, style, hideWithKeyboard }: FittedProps) {
-  const { progress } = useReanimatedKeyboardAnimation();
+function Fitted({ children, style, hideWithKeyboard, fitFadeOutDuration = 150 }: FittedProps) {
   const [room, setRoom] = useState(0);
   const [need, setNeed] = useState(0);
   const keyboardUp = useKeyboardUp();
+  const progress = useSharedValue(keyboardUp ? 1 : 0);
+  const trackKeyboard = (event: NativeEvent) => {
+    'worklet';
+    progress.set(event.progress);
+  };
+  useGenericKeyboardHandler({ onMove: trackKeyboard, onInteractive: trackKeyboard, onEnd: trackKeyboard }, []);
+
   const pinned = !!hideWithKeyboard;
   const measured = room > 0 && need > 0;
   // Needs some slack beyond its own height, so it's gone early rather than fading as the slot
@@ -63,8 +71,8 @@ function Fitted({ children, style, hideWithKeyboard }: FittedProps) {
 
   const fitOpacity = useSharedValue(0);
   useEffect(() => {
-    fitOpacity.value = withTiming(fits ? 1 : 0, { duration: fits ? 220 : 150 });
-  }, [fits, fitOpacity]);
+    fitOpacity.value = withTiming(fits ? 1 : 0, { duration: fits ? FIT_FADE_IN_DURATION : fitFadeOutDuration });
+  }, [fits, fitOpacity, fitFadeOutDuration]);
   // Pinned, the keyboard fade runs off the keyboard's own animation on the UI thread, frame for
   // frame with the space shrinking, so it never lags a JS keyboard event.
   const fade = useAnimatedStyle(() => ({
@@ -105,7 +113,7 @@ function RecentActivity({ hideWithKeyboard }: { hideWithKeyboard?: boolean }) {
   const events = useUsageEvents();
   const days = useMemo(() => dailyTotals(events), [events]);
   return (
-    <Fitted style={styles.activity} hideWithKeyboard={hideWithKeyboard}>
+    <Fitted style={styles.activity} hideWithKeyboard={hideWithKeyboard} fitFadeOutDuration={FIT_FADE_IN_DURATION}>
       <ActivityHeatmap days={days} weeks={HEATMAP_WEEKS} cell={16} caption onPress={() => router.push('/usage')} />
     </Fitted>
   );
