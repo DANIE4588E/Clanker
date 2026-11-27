@@ -49,6 +49,41 @@ const synced = new Map<string, { workspace: string; files: Map<string, string> }
 const queues = new Map<string, Promise<unknown>>();
 
 /**
+ * Ordinary runs get a worker per language and workspace, so code from one chat never shares a
+ * global scope (patched builtins, wrapped handlers) with another chat's runs. At most this many
+ * stay warm per language, so going back and forth between a couple of chats stays fast; the
+ * least recently used idle one is terminated past that. Background jobs get their own worker,
+ * freed when they end, and aren't counted.
+ */
+const MAX_WARM_PER_LANGUAGE = 2;
+// Per language: its ordinary workers, least recently used first.
+const warm: Record<ScriptLanguage, string[]> = { python: [], javascript: [] };
+
+function workerKey(lang: ScriptLanguage, ws: Workspace) {
+  return `${lang}:${ws.key}`;
+}
+
+/** Terminates the least recently used idle workers of `lang` past the limit. */
+function trimWarm(lang: ScriptLanguage) {
+  const list = warm[lang];
+  for (let i = 0; list.length > MAX_WARM_PER_LANGUAGE && i < list.length; ) {
+    const key = list[i];
+    // Busy: a run on it is queued or under way.
+    if (queues.has(key)) i++;
+    else releaseWorker(key);
+  }
+}
+
+/** Marks an ordinary worker as just used. */
+function touchWarm(lang: ScriptLanguage, key: string) {
+  const list = warm[lang];
+  const at = list.indexOf(key);
+  if (at >= 0) list.splice(at, 1);
+  list.push(key);
+  trimWarm(lang);
+}
+
+/**
  * What the worker holds of `ws`. A worker that last ran for another workspace (or whose state is
  * unknown) is told to wipe its copy, so one chat's files never show up in another's scripts.
  */
@@ -67,7 +102,11 @@ function failAll(worker: string | null, error: string) {
     p.reject(new Error(error));
   }
   if (worker) synced.delete(worker);
-  else synced.clear();
+  else {
+    synced.clear();
+    warm.python = [];
+    warm.javascript = [];
+  }
 }
 
 /** Called by the host component with a function that runs JS in the page, or null on unmount. */
@@ -95,6 +134,8 @@ export function handleRuntimeMessage(data: string) {
   if (msg.type === 'ready') {
     // A fresh page has no workers.
     synced.clear();
+    warm.python = [];
+    warm.javascript = [];
     ready = true;
     readyWaiters.forEach((w) => w());
     readyWaiters = [];
@@ -102,7 +143,9 @@ export function handleRuntimeMessage(data: string) {
     failAll(msg.worker, `The script runtime crashed: ${msg.error ?? 'unknown error'}`);
   } else if (msg.type === 'result' && msg.id) {
     const p = pending.get(msg.id);
-    if (!p) return;
+    // The page stamps each result with the worker it came from, so a script can't settle a run
+    // that belongs to another worker (another chat's) by posting a result with its id.
+    if (!p || msg.worker !== p.worker) return;
     pending.delete(msg.id);
     p.resolve(msg as ResultMessage);
   }
@@ -123,6 +166,10 @@ function waitReady(timeoutMs: number) {
 export function releaseWorker(worker: string) {
   inject?.(`window.__clanker && window.__clanker.kill(${JSON.stringify(worker)}); true;`);
   synced.delete(worker);
+  for (const list of Object.values(warm)) {
+    const at = list.indexOf(worker);
+    if (at >= 0) list.splice(at, 1);
+  }
 }
 
 /** Copies workspace files that changed since the worker's last run into it. */
@@ -178,8 +225,9 @@ async function applyChanges(worker: string, ws: Workspace, msg: ResultMessage) {
 
 /**
  * Runs Python or JavaScript in the sandboxed WebView runtime against a copy of the workspace.
- * `worker` names the worker to use (default: the language's shared one); a run waits for any
- * earlier run on the same worker, and its timeout starts once it begins.
+ * `worker` names the worker to use (default: the one for this language and workspace, kept warm
+ * for the workspace's next run); a run waits for any earlier run on the same worker, and its
+ * timeout starts once it begins.
  */
 export async function runScript(opts: {
   lang: ScriptLanguage;
@@ -191,14 +239,19 @@ export async function runScript(opts: {
   /** The workspace the script runs in. */
   workspace: Workspace;
 }): Promise<ScriptResult> {
-  const worker = opts.worker ?? opts.lang;
+  const pooled = !opts.worker;
+  const worker = opts.worker ?? workerKey(opts.lang, opts.workspace);
   const previous = queues.get(worker) ?? Promise.resolve();
   const run = previous.catch(() => {}).then(() => execute(worker, opts));
   queues.set(worker, run);
+  // After queueing, so the trim this does counts this worker as busy.
+  if (pooled) touchWarm(opts.lang, worker);
   try {
     return await run;
   } finally {
     if (queues.get(worker) === run) queues.delete(worker);
+    // A worker that was busy when it fell past the limit can go now.
+    if (pooled) trimWarm(opts.lang);
   }
 }
 

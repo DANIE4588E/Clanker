@@ -128,6 +128,16 @@ export class Workspace {
   }
 }
 
+let filesVersion = 0;
+
+/** Bumped whenever files in a workspace may have changed, for caches of what's in them (see fileMentions). */
+export const workspaceFilesVersion = () => filesVersion;
+
+/** Call after writing, moving or deleting workspace files. */
+export function workspaceFilesChanged() {
+  filesVersion++;
+}
+
 export const chatWorkspace = (conversationId: string) => new Workspace(`chat:${conversationId}`);
 export const projectWorkspace = (projectId: string) => new Workspace(`project:${projectId}`);
 /** The one folder every chat shared before workspaces were per chat; those chats keep using it. */

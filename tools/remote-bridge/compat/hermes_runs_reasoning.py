@@ -1,5 +1,9 @@
 """Forward Hermes Runs reasoning without changing turn admission or tool execution.
 
+Needed while Hermes's Runs executor doesn't pass a reasoning callback (0.22.5
+through at least 0.23.4). It checks the code, not the version: on a Hermes that
+already forwards reasoning it reports that and changes nothing.
+
 Use --check to review the diff; --apply preserves a backup before changing the
 installed gateway module. Restart an idle Hermes gateway to load the fix.
 """
@@ -13,6 +17,10 @@ import tempfile
 from datetime import datetime, timezone
 
 
+class NativeSupport(Exception):
+    """This Hermes already does what the fix adds; nothing to change."""
+
+
 def patch_source(source):
     tree = ast.parse(source)
     node = next((item for item in tree.body if isinstance(item, ast.AsyncFunctionDef) and item.name == '_execute_run'), None)
@@ -23,7 +31,7 @@ def patch_source(source):
     if 'reasoning_callback=_reasoning_cb' in original and 'def _reasoning_cb(' in original:
         return source
     if 'reasoning_callback=' in original:
-        raise ValueError('Hermes already has custom reasoning wiring; no changes made.')
+        raise NativeSupport('This Hermes forwards reasoning on Runs itself; no fix needed.')
     anchors = [
         ('    def _interim_cb(', '''    # Clanker compatibility: expose the model's emitted reasoning deltas on Runs SSE.
     def _reasoning_cb(delta: Optional[str]) -> None:
@@ -59,7 +67,11 @@ def main():
         parser.error('The target must be the Hermes api_server_runs.py module.')
     original = target.read_bytes()
     source = original.decode('utf-8').replace('\r\n', '\n')
-    updated = patch_source(source)
+    try:
+        updated = patch_source(source)
+    except NativeSupport as native:
+        print(native)
+        return
     if updated == source:
         print('Reasoning forwarding is already installed; no changes needed.')
         return

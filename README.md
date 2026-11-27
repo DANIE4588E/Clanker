@@ -19,11 +19,11 @@ Features: streaming replies with stop/regenerate, markdown with syntax-highlight
 
 Remote chats support streamed replies, tool progress, approvals/clarifications, Stop, actual file uploads and downloading files the agent creates or edits. Tools run on the remote device. Follow-ups queue; regeneration is disabled to avoid repeating remote actions. The remote agent owns its memory and history; Clanker's automatic titles, suggested prompts, memory extraction and temporary-chat mode do not apply.
 
-Install the included [companion bridge](tools/remote-bridge/README.md) on each agent device. Hermes needs its API server enabled and an upstream key. Harness needs the matching `0.2.1-rc.5` release, its local web server and launch token. Both agents must see the bridge's workspace directory. The linked guide includes exact Windows/POSIX setup commands, networking, retention and recovery instructions, plus a backed-up compatibility fix for Hermes versions whose Runs endpoint omits streamed reasoning.
+Install the included [companion bridge](tools/remote-bridge/README.md) on each agent device. Hermes needs its API server enabled and an upstream key. Harness needs `0.2.1-rc.5` or any later 0.2 release, stable or nightly, plus its local web server and launch token. Both agents must see the bridge's workspace directory. The linked guide includes exact Windows/POSIX setup commands, networking, retention and recovery instructions, plus optional, backed-up compatibility fixes for Hermes versions whose Runs endpoint omits streamed reasoning and usage statistics (0.22.5 through at least the current 0.23.4). The bridge works with Hermes 0.22.5 and later without a per-release update: it checks the API features Hermes reports, not its version.
 
 Hermes models include its authenticated provider catalogue, displayed as `provider/model`, with a searchable picker on empty remote chats. In **Settings → Backends**, use **Test connection** and **Save** to refresh an existing model list. Add alternative addresses there for the same bridge's LAN, VPN or HTTPS routes; the app verifies bridge identity before changing addresses and keeps the same remote session.
 
-Hermes and Harness chats also use the composer's effort slider and context meter, and the usual reply tokens/second and cache-hit display settings. Effort is saved per chat and frozen for submitted/queued messages. Harness supplies its exact model-specific effort choices and default; Hermes providers may clamp levels or need the bridge's per-model constraints. The bridge guide includes the Hermes 0.22.5 compatibility update needed for its native usage statistics. Harness uses its existing APIs without a source patch. Metrics appear when the backend reports them; older replies are not backfilled. Remote agents manage compression. Harness speed/cache figures cover the reply's reported model attempts; Hermes uses its native rolling/session counters.
+Hermes and Harness chats also use the composer's effort slider and context meter, and the usual reply tokens/second and cache-hit display settings. Effort is saved per chat and frozen for submitted/queued messages. Harness supplies its exact model-specific effort choices and default; Hermes providers may clamp levels or need the bridge's per-model constraints. For Hermes, those meters need the bridge guide's optional compatibility fix while Hermes's Runs endpoint omits its native usage statistics (0.22.5 through at least 0.23.4); the fix does nothing on a Hermes that reports them itself. Harness uses its existing APIs without a source patch. Metrics appear when the backend reports them; older replies are not backfilled. Remote agents manage compression. Harness speed/cache figures cover the reply's reported model attempts; Hermes uses its native rolling/session counters.
 
 For a new Harness Desktop device, install the standalone MIT-licensed [dsh-clanker-bridge plugin](https://github.com/danielyongzx1/dsh-clanker-bridge). It includes the bridge, generates pairing credentials locally, and follows Desktop's changing port/token through the normal shortcut; no Clanker checkout or separate Node installation is required. Existing checkout-based plugin installations remain supported and are not migrated automatically. A Windows sign-in helper can start the Hermes bridge using its persistent API key. See the bridge guide for installation and removal commands. Harness periodically reconciles saved journal data so a missed completion event cannot leave a finished turn streaming indefinitely.
 
@@ -112,7 +112,7 @@ For a local Ollama or LM Studio server, use your computer's LAN IP (not `localho
 
 ## Build Android APK
 
-Build a release APK locally and archive it in `builds/clanker-<version>.apk` (based on `expo.version` in `app.json`) so Gradle rebuilds don't overwrite earlier APKs:
+Build release APKs locally and archive them in `builds/` (named after `expo.version` in `app.json`) so Gradle rebuilds don't overwrite earlier APKs: one per CPU ABI, `clanker-<version>-<abi>.apk`, plus the universal `clanker-<version>.apk`. Attach them all to a GitHub release; the in-app updater downloads the one for the phone's ABI, else the universal one.
 
 ```sh
 npm run build:apk
@@ -120,12 +120,40 @@ npm run build:apk
 
 Common flags (pass after `--`):
 
-- `--arch arm64-v8a` – smaller, faster single-ABI build for modern ARM64 phones
+- `--arch arm64-v8a` – smaller, faster build of one APK for just those ABIs (no per-ABI split)
 - `--out <dir>` – custom output directory (or set `CLANKER_BUILD_DIR`)
-- `--install` – install the built APK over USB via `adb install -r`
+- `--install` – install the APK for the connected phone's ABI over USB via `adb install -r`
 - `--skip-prebuild` / `--clean` – skip or clean `expo prebuild --platform android`
-- `--overwrite` – overwrite an existing `clanker-<version>.apk` instead of auto-numbering (`-2`, `-3`, …)
-- `--dry-run` – preview commands and output path without building
+- `--overwrite` – overwrite existing APKs of the same names instead of auto-numbering (`-2`, `-3`, …)
+- `--allow-debug-key` – copy APKs signed with the public debug key anyway (see below)
+- `--dry-run` – preview commands and output paths without building
+
+### Release signing
+
+Without a release key, Gradle signs release APKs with React Native's public debug key, so anyone could sign an APK that Android accepts as a Clanker update. The build script checks every APK with `apksigner` and refuses to copy debug-signed ones unless `--allow-debug-key` is passed (meant for one final transitional release only).
+
+Create a key once (keystores are git-ignored; keep it outside `android/`, which is regenerated):
+
+```sh
+keytool -genkeypair -v -storetype PKCS12 -keystore clanker-release.jks -alias clanker -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Then add to `.env.local` (never committed):
+
+```sh
+CLANKER_RELEASE_STORE_FILE=./clanker-release.jks
+CLANKER_RELEASE_KEY_ALIAS=clanker
+CLANKER_RELEASE_STORE_PASSWORD='...'
+CLANKER_RELEASE_KEY_PASSWORD='...'
+```
+
+The store file is relative to the project root (or absolute). With a PKCS12 keystore the key password is the store password. Quote the passwords: an unquoted `#` starts a comment.
+
+`expo prebuild` (via `plugins/withAndroidRelease.js`) then points the release build at this key; only the path and alias go into `android/app/build.gradle`, and the passwords are read when Gradle runs (`npm run build:apk` passes them on from `.env.local`; Gradle properties of the same names work too). Without these variables, builds are signed with the debug key as before.
+
+**Back the keystore and its passwords up somewhere safe.** Android only installs an update signed with the same key as the installed app: lose the key and existing installs can never be updated in place again.
+
+Switching keys works the same way once: phones with a debug-signed Clanker can't install the first release-signed build over it. They have to uninstall Clanker and install the new APK (which deletes the app's data, so export anything worth keeping first); every update after that installs normally.
 
 ## Layout
 

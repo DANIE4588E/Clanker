@@ -48,12 +48,12 @@ export function recordStep(conversationId: string, replyId: string, step: StepSt
   if (end < 0) return;
   const reply = messages[end];
   const steps = [...(reply.steps ?? []), step];
-  const recent = messages
-    .slice(0, end)
-    .filter((m) => m.role === 'assistant' && m.model === reply.model)
-    .flatMap((m) => m.steps ?? [])
-    .concat(steps)
-    .slice(-WINDOW);
+  // The newest WINDOW steps, read back from the reply rather than over the whole chat.
+  let recent = steps.slice(-WINDOW);
+  for (let i = end - 1; i >= 0 && recent.length < WINDOW; i--) {
+    const m = messages[i];
+    if (m.role === 'assistant' && m.model === reply.model && m.steps?.length) recent = [...m.steps, ...recent].slice(-WINDOW);
+  }
   useChats.getState().updateMessage(conversationId, replyId, { steps, stats: summarize(recent) });
 }
 

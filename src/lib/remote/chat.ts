@@ -101,6 +101,9 @@ export async function resumeRemoteChat(id: string) {
       flushJsonStorage();
     }
     let failures = 0;
+    // The first snapshot after (re)connecting is always applied, as is the one after an error
+    // message; after that only a newer cursor changes anything, so an idle poll writes nothing.
+    let stale = true;
     while (useChats.getState().conversations[id]?.remote?.submissionId === initial.remote.submissionId) {
       try {
         if (useChats.getState().conversations[id]?.remote?.stopRequested) {
@@ -112,7 +115,9 @@ export async function resumeRemoteChat(id: string) {
         const current = useChats.getState().conversations[id];
         if (!current || current.remote?.submissionId !== initial.remote.submissionId) break;
         if (snapshot.sessionId !== sessionId || snapshot.id !== runId) throw new Error('Bridge returned the wrong session.');
-        if (snapshot.cursor >= (current.remote.cursor ?? 0)) {
+        const stored = current.remote.cursor ?? 0;
+        if (snapshot.cursor > stored || (stale && snapshot.cursor >= stored) || remoteTerminal(snapshot.state)) {
+          stale = false;
           useChats.getState().updateMessage(id, initial.remote.replyId, {
             content: snapshot.content,
             remote: { state: snapshot.state, controls: snapshot.controls, files: snapshot.files },
@@ -134,7 +139,15 @@ export async function resumeRemoteChat(id: string) {
         }
         if (snapshot.state === 'unknown') break;
       } catch (error) {
+        // The bridge pruned this long-finished turn: keep what the reply already shows and settle it.
+        if (error instanceof Error && error.message.startsWith('410:')) {
+          useChats.getState().updateMessage(id, initial.remote.replyId, { status: 'done', error: error.message.slice(5).trim() });
+          useChats.getState().setRemote(id, { submissionId: undefined, submissionEffort: undefined, submissionModel: undefined, runId: undefined, replyId: undefined, userMessageId: undefined, stopRequested: false });
+          flushJsonStorage();
+          break;
+        }
         failures++;
+        stale = true;
         useChats.getState().updateMessage(id, initial.remote.replyId, {
           error: `Connection interrupted. Reconnecting without repeating the turn. ${error instanceof Error ? error.message : String(error)}`,
         });

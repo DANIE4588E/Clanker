@@ -5,24 +5,28 @@ import { harnessEndpoint } from './desktop-discovery.mjs';
 
 const unwrap = (result) => { if (!result.ok) throw new Error(`Harness ${result.error.code}: ${result.error.message}`); return result.value; };
 
+/** Per run, the content rendered from its journal alone, so a live chunk doesn't re-render every event. */
+const rendered = new WeakMap();
+
+/** Rebuilds the run's content, state and metrics from its journal events, then appends live text. */
 export function renderHarnessRun(run) {
-  run.content = [];
+  const journal = { content: [] };
   const events = Object.values(run.harnessEvents ?? {}).sort((a, b) => a.seq - b.seq);
   for (const event of events) {
     const data = event.data;
     if (event.type === 'assistant/message') {
       for (const block of data.message.content ?? []) {
-        if (block.type === 'text') addText(run, block.text);
-        if (block.type === 'reasoning') addText(run, block.text, 'thought');
+        if (block.type === 'text') addText(journal, block.text);
+        if (block.type === 'reasoning') addText(journal, block.text, 'thought');
       }
     }
     if (event.type === 'tool/call') {
       let input; try { input = JSON.parse(data.arguments); } catch { input = { arguments: data.arguments }; }
-      toolEvent(run, { id: data.callId, name: data.name, input });
+      toolEvent(journal, { id: data.callId, name: data.name, input });
     }
     if (event.type === 'tool/result') {
       const message = data.message;
-      toolEvent(run, { id: message.toolCallId, name: message.source?.toolName, error: message.isError, preview: (message.content ?? []).map((p) => p.text ?? '').join('\n') }, true);
+      toolEvent(journal, { id: message.toolCallId, name: message.source?.toolName, error: message.isError, preview: (message.content ?? []).map((p) => p.text ?? '').join('\n') }, true);
     }
     if (event.type === 'turn/end') {
       const reason = data.reason?.kind;
@@ -31,6 +35,19 @@ export function renderHarnessRun(run) {
     }
   }
   renderHarnessMetrics(run, events);
+  rendered.set(run, { events: run.harnessEvents, count: events.length, content: journal.content });
+  renderHarnessLive(run);
+}
+
+/**
+ * Only the live stream changed: reuse the journal rendering and append the live text. Falls back
+ * to a full render when the journal changed since, or was never rendered in this process.
+ */
+export function renderHarnessLive(run) {
+  const cache = rendered.get(run);
+  if (!cache || cache.events !== run.harnessEvents || cache.count !== Object.keys(run.harnessEvents ?? {}).length) return renderHarnessRun(run);
+  // Shallow copies: live text appends to the last part without touching the cached one.
+  run.content = cache.content.map((part) => ({ ...part }));
   if (!terminal(run.state)) for (const part of run.harnessLive ?? []) addText(run, part.text, part.type);
 }
 
@@ -59,7 +76,7 @@ export class HarnessAdapter {
     const base = endpoint.url.replace(/\/+$/, '') + '/';
     const response = await fetch(`${base}connect?token=${encodeURIComponent(endpoint.token)}&interactions=answer`, { redirect: 'manual', signal: AbortSignal.timeout(15000) });
     const cookie = response.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
-    if (response.status !== 302 || !cookie) throw new Error('Harness API pairing failed. Use the launch token from dsh web --no-open; this bridge supports Harness 0.2.1-rc.5.');
+    if (response.status !== 302 || !cookie) throw new Error('Harness API pairing failed. Use the launch token from dsh web --no-open; this bridge supports Harness 0.2.1-rc.5 and later 0.2 releases.');
     const ctx = new Context();
     registry.apply(ctx);
     connection.installConnection(ctx, { interactions: 'answer', transport: {
@@ -84,7 +101,7 @@ export class HarnessAdapter {
   async models() {
     const remote = await this.connect();
     const catalog = unwrap(await remote.session.modelCatalog());
-    if (!Array.isArray(catalog.groups)) throw new Error('Unsupported Harness model catalog. Use the documented compatible release 0.2.1-rc.5.');
+    if (!Array.isArray(catalog.groups)) throw new Error('Unsupported Harness model catalog. This bridge supports Harness 0.2.1-rc.5 and later 0.2 releases.');
     this.modelRoutes = new Map(catalog.groups.flatMap((group) => group.models.map((model) => [`${group.id}/${model.id}`, { provider: group.id, model: model.id }])));
     this.modelOptions = Object.fromEntries(catalog.groups.flatMap((group) => group.models.map((model) => [`${group.id}/${model.id}`, {
       efforts: (model.reasoning?.efforts ?? []).map((entry) => entry.id),
@@ -160,7 +177,8 @@ export class HarnessAdapter {
             if (live.type === 'start' || live.type === 'end') r.harnessLive = [];
             if (live.type === 'chunk' && ['text-delta', 'reasoning-delta'].includes(live.chunk.type)) (r.harnessLive ??= []).push({ type: live.chunk.type === 'text-delta' ? 'text' : 'thought', text: live.chunk.text });
           }
-          renderHarnessRun(r);
+          // A live chunk leaves the journal as it was, and chunks are most of the frames.
+          if (frame.type === 'assistant-stream' && !projection) renderHarnessLive(r); else renderHarnessRun(r);
         });
       });
       pending = operation.catch(() => {});

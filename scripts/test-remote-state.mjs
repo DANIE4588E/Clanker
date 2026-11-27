@@ -16,6 +16,8 @@ function app({ snapshot } = {}) {
   const loaded = new Map(); let serial = 0;
   const persisted = new Map();
   const storage = { uid: () => `id${++serial}`, flushJsonStorage() {}, apiKeys: { get: async () => null, remove: async () => {}, set: async () => {} }, jsonFileStorage: { getItem: (key) => persisted.get(key) ?? null, setItem: (key, value) => persisted.set(key, value), removeItem: (key) => persisted.delete(key) } };
+  // The chats' file-per-chat storage, minus the files: every chat here is loaded (no stubs).
+  Object.assign(storage, { splitJsonFileStorage: () => storage.jsonFileStorage, isStub: () => false, stubSummary: () => undefined, stubLoaded: () => true, loadStub() {}, restub: (entry, patch) => ({ ...entry, ...patch }) });
   const ui = { currentId: null, newChatMemoryOff: false, newChatProjectId: null };
   const mocks = {
     '@/lib/storage': storage,
@@ -46,7 +48,7 @@ function app({ snapshot } = {}) {
       if (!specifier.startsWith('.') && !specifier.startsWith('@/')) return require(specifier);
       const resolved = specifier.startsWith('.') ? path.posix.normalize(path.posix.join(path.posix.dirname(normalized), specifier)).replace(/^src\//, '@/') : specifier;
       if (mocks[resolved]) return mocks[resolved];
-      if (['@/store/chats', '@/store/backends', '@/lib/remote/chat', '@/lib/remote/effort', '@/lib/remote/types'].includes(resolved)) return load(resolved);
+      if (['@/store/chats', '@/lib/chatIndex', '@/lib/quotes', '@/store/backends', '@/lib/remote/chat', '@/lib/remote/effort', '@/lib/remote/types'].includes(resolved)) return load(resolved);
       // Built-in agent dependencies are intentionally unavailable: remote routing
       // must return before any of their tools, models or helper requests are used.
       return new Proxy({}, { get: (_target, key) => key === '__esModule' ? false : () => { throw new Error(`Unexpected local agent call: ${resolved}.${String(key)}`); } });

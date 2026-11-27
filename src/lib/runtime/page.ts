@@ -1,9 +1,10 @@
 /**
- * The page inside the hidden runtime WebView. Python (Pyodide) and JavaScript each run in their
- * own Web Worker so a runaway script can be killed by terminating the worker. Each worker keeps a
- * copy of a workspace: the app sends files that changed since the last run (with reset set when
- * the run is for another workspace, so the old copy is wiped first), and the worker reports back
- * the files the script created, changed or deleted.
+ * The page inside the hidden runtime WebView. Python (Pyodide) and JavaScript run in Web Workers
+ * so a runaway script can be killed by terminating the worker; the app keeps one per language and
+ * workspace (plus one per background job), so scripts from different chats never share a global
+ * scope. Each worker keeps a copy of its workspace: the app sends files that changed since the
+ * last run (with reset set when its copy can't be trusted, so it is wiped first), and the worker
+ * reports back the files the script created, changed or deleted.
  */
 
 export const PYODIDE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
@@ -42,6 +43,16 @@ function fmt(v) {
   if (typeof v === 'string') return v;
   if (v instanceof Error) return v.stack || String(v);
   try { return JSON.stringify(v, null, 2) ?? String(v); } catch { return String(v); }
+}
+// Takes the run messages before any script can: the listener is added before user code ever
+// runs, it stops listeners added later (addEventListener or onmessage) from seeing the message,
+// and onmessage can't be reassigned. So a script can't spy on or alter later runs' files.
+function listen(handle) {
+  self.addEventListener('message', (e) => {
+    e.stopImmediatePropagation();
+    handle(e);
+  });
+  Object.defineProperty(self, 'onmessage', { value: null, writable: false, configurable: false });
 }
 `;
 
@@ -131,7 +142,7 @@ function applyFiles(files, deleted, reset) {
   }
 }
 
-onmessage = async (e) => {
+listen(async (e) => {
   const m = e.data;
   const out = [];
   const err = [];
@@ -182,7 +193,7 @@ onmessage = async (e) => {
   }
   // A failed download can't be retried inside this worker, so ask for a fresh one.
   postMessage({ type: 'result', id: m.id, stdout: out.join('\n'), stderr: err.join('\n'), value, error, files, deleted, fatal: !!loadError });
-};
+});
 `;
 
 const JS_WORKER = String.raw`
@@ -233,7 +244,7 @@ const fs = {
 };
 const AsyncFunction = (async () => {}).constructor;
 
-onmessage = async (e) => {
+listen(async (e) => {
   const m = e.data;
   if (m.reset) store.clear();
   for (const rel of m.deleted) store.delete(rel);
@@ -254,7 +265,7 @@ onmessage = async (e) => {
   const files = {};
   for (const k of dirty) files[k] = bytesToB64(store.get(k));
   postMessage({ type: 'result', id: m.id, stdout: out.join('\n'), stderr: '', value, error, files, deleted: [...removed] });
-};
+});
 `;
 
 export const RUNTIME_HTML = `<!doctype html>
@@ -262,13 +273,18 @@ export const RUNTIME_HTML = `<!doctype html>
 (function () {
   const send = (m) => window.ReactNativeWebView.postMessage(JSON.stringify(m));
   const SOURCES = { python: ${JSON.stringify(PYTHON_WORKER)}, javascript: ${JSON.stringify(JS_WORKER)} };
-  // Keyed by name: one worker per language for ordinary runs, plus one per background job.
+  // Keyed by name: one worker per language and workspace for ordinary runs, plus one per background job.
   const workers = {};
   function worker(key, lang) {
     if (workers[key]) return workers[key];
     const url = URL.createObjectURL(new Blob([SOURCES[lang]], { type: 'text/javascript' }));
     const w = new Worker(url, lang === 'javascript' ? { type: 'module' } : undefined);
-    w.onmessage = (e) => send(e.data);
+    // Only results pass, stamped with the worker they really came from: what a worker posts is up
+    // to the script inside it, which mustn't pose as another worker or as the page.
+    w.onmessage = (e) => {
+      const d = e.data;
+      if (d && typeof d === 'object' && d.type === 'result') send(Object.assign({}, d, { worker: key }));
+    };
     w.onerror = (e) => {
       e.preventDefault && e.preventDefault();
       send({ type: 'crash', worker: key, error: e.message || 'The ' + lang + ' worker crashed' });

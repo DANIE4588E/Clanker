@@ -8,18 +8,28 @@ const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const GROUP = 'antigravity';
 const needsShell = (command) => /\.(cmd|bat)$/i.test(command);
 
+// cmd.exe's special characters. Each one is caret-escaped, quotes included, so cmd never enters a
+// quoted region it could be talked out of, and `%VAR%` becomes `%VAR^%`, a variable that isn't set.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+const caret = (value) => value.replace(CMD_META, '^$1');
+/** One argument for a program reading its command line with the C runtime's rules (quotes and backslashes). */
+const crtQuote = (value) => `"${String(value).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
 /**
- * Spawns the CLI. Node's `shell: true` mangles quoted paths with spaces, and cmd.exe splits even
- * quoted arguments at newlines, discarding the rest of the line — so for .cmd/.bat shims the
- * command line is built by hand (`/d /s /c "<program> <args>"`, the one form whose quoting survives
- * cmd) with newline-free arguments. The direct .exe path — what the official installer drops on
- * PATH — keeps multi-line prompts intact.
+ * The cmd.exe command line for a .cmd/.bat shim. cmd parses it once, and the shim parses its `%*`
+ * again when it passes the arguments on, so arguments are escaped twice. cmd can't carry a newline
+ * inside an argument at all, so newlines become spaces.
+ */
+export const cmdLine = (command, args) => [caret(command), ...args.map((arg) => caret(caret(crtQuote(String(arg).replace(/[\r\n]+/g, ' ')))))].join(' ');
+
+/**
+ * Spawns the CLI. A .cmd/.bat shim only runs through cmd.exe, whose parser would act on `&`, `|`,
+ * `%VAR%` and quotes inside a prompt, so its command line is fully escaped by hand (see cmdLine).
+ * The direct .exe path, which the official installer puts on PATH, takes arguments as they are
+ * and keeps multi-line prompts intact.
  */
 const cliSpawn = (command, args, options) => {
   if (!needsShell(command)) return spawn(command, args, options);
-  const quote = (value) => /[\s"]/.test(value) ? `"${value.replace(/[\r\n]+/g, ' ').replace(/%/g, '%%').replace(/"/g, '\\"').replace(/(\\+)$/, (m) => m + m)}"` : String(value).replace(/%/g, '%%');
-  const line = [`"${command.replace(/"/g, '\\"')}"`, ...args.map(quote)].join(' ');
-  return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...options, windowsVerbatimArguments: true });
+  return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${cmdLine(command, args)}"`], { ...options, windowsVerbatimArguments: true });
 };
 
 /** Runs the CLI with no stdin and returns its stdout; the failure carries stderr's tail. */

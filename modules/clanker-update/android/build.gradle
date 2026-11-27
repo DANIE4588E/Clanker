@@ -1,0 +1,15 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.clankerupdate'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.clankerupdate"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}

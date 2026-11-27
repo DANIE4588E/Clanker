@@ -12,7 +12,7 @@ import { answerNow } from '@/lib/chat';
 import type { ContentPart, FilePart, ImagePart, ToolPart } from '@/lib/providers';
 import { mentionSpans, sentLabels } from '@/lib/mentions';
 import { splitQuotes } from '@/lib/quotes';
-import { sitesOf, sourcesOf } from '@/lib/sources';
+import { sitesOf, sourcesOf, type Site } from '@/lib/sources';
 import { formatStats } from '@/lib/stats';
 import { useTheme } from '@/lib/theme';
 import { useActivityLabel } from '@/lib/local/useActivityLabel';
@@ -156,6 +156,109 @@ function segmentsOf(content: ContentPart[], reasoning?: string, thoughtMs?: numb
   return out;
 }
 
+/** A fold of a list's first `count` parts, made from `parts`. */
+type Snapshot<S> = { parts: readonly unknown[]; count: number; state: S };
+
+/**
+ * Folds `parts` with `step`, picking up from the fold of a prefix made for an earlier version of
+ * the same list. Parts are replaced rather than changed, and a streaming reply only changes its
+ * last part or adds more, so all but the newest parts fold once rather than on every token.
+ * Snapshots are kept by the last part they cover; `copy` keeps them from being changed.
+ */
+function foldParts<T extends object, S>(
+  parts: readonly T[],
+  cache: WeakMap<T, Snapshot<S>>,
+  init: () => S,
+  copy: (state: S) => S,
+  step: (state: S, part: T) => void
+): S {
+  const n = parts.length;
+  let state: S | null = null;
+  let from = 0;
+  // The newest snapshot still in this list: one part back while the last grows, a few after a round of calls lands.
+  for (let j = n - 2; j >= 0 && j >= n - 5 && !state; j--) {
+    const snap = cache.get(parts[j]);
+    if (!snap || snap.count !== j + 1) continue;
+    let same = true;
+    for (let i = 0; i < j && same; i++) same = snap.parts[i] === parts[i];
+    if (same) {
+      state = copy(snap.state);
+      from = j + 1;
+    }
+  }
+  state ??= init();
+  for (let i = from; i < n - 1; i++) step(state, parts[i]);
+  if (n >= 2 && from < n - 1) cache.set(parts[n - 2], { parts, count: n - 1, state: copy(state) });
+  if (n >= 1 && from < n) step(state, parts[n - 1]);
+  return state;
+}
+
+const segmentSnapshots = new WeakMap<ContentPart, Snapshot<Segment[]>>();
+
+/** segmentsOf for a reply without top-level reasoning, folded incrementally as it streams. */
+function streamedSegments(content: ContentPart[]): Segment[] {
+  return foldParts<ContentPart, Segment[]>(
+    content,
+    segmentSnapshots,
+    () => [],
+    (s) => s.slice(),
+    (out, part) => {
+      const last = out[out.length - 1];
+      if (part.type === 'text') {
+        // A new segment rather than a longer one: snapshots share the segments they hold.
+        if (last?.kind === 'text') out[out.length - 1] = { kind: 'text', text: last.text + part.text, at: last.at };
+        else out.push({ kind: 'text', text: part.text, at: part.at });
+      } else if (part.type === 'tool') out.push({ kind: 'tool', part });
+      else if (part.type === 'thought') out.push({ kind: 'thought', text: part.text, ms: part.ms });
+    }
+  );
+}
+
+type SiteFold = { sites: Map<string, Site>; searched: boolean };
+const siteSnapshots = new WeakMap<ContentPart, Snapshot<SiteFold>>();
+
+/** sitesOf, folded incrementally as the reply streams. */
+function streamedSites(content: ContentPart[]): { sites: Site[]; searched: boolean } {
+  const fold = foldParts<ContentPart, SiteFold>(
+    content,
+    siteSnapshots,
+    () => ({ sites: new Map(), searched: false }),
+    (s) => ({ sites: new Map(s.sites), searched: s.searched }),
+    (s, part) => {
+      if (part.type !== 'tool') return;
+      // sitesOf for one part, added to what came before it.
+      const one = sitesOf([part]);
+      s.searched ||= one.searched;
+      for (const site of one.sites) if (!s.sites.has(site.host)) s.sites.set(site.host, site);
+    }
+  );
+  return { sites: [...fold.sites.values()], searched: fold.searched };
+}
+
+/** The length `texts` joined and trimmed would have, without joining them. */
+function trimmedLength(texts: { text: string }[]) {
+  let total = 0;
+  for (const t of texts) total += t.text.length;
+  // \s matches what trim() removes.
+  let lead = 0;
+  lead: for (const { text } of texts) {
+    for (let i = 0; i < text.length; i++) {
+      if (!/\s/.test(text[i])) break lead;
+      lead++;
+    }
+  }
+  if (lead === total) return 0;
+  let trail = 0;
+  trail: for (let k = texts.length - 1; k >= 0; k--) {
+    const { text } = texts[k];
+    for (let i = text.length - 1; i >= 0; i--) {
+      if (!/\s/.test(text[i])) break trail;
+      trail++;
+    }
+  }
+  return total - lead - trail;
+}
+
 // While a reply streams, text after its last tool call may be the answer or a note before the next
 // call; there is no telling until the response ends. Notes are a sentence or two, so the work folds
 // away once the text runs past this, and otherwise when the reply finishes.
@@ -171,7 +274,8 @@ function splitWork(segments: Segment[], thoughts: boolean) {
   const work = segments.slice(0, end + 1);
   if (!work.some((s) => s.kind === 'tool' || (thoughts && s.kind === 'thought'))) return null;
   const answer = segments.slice(end + 1) as Extract<Segment, { kind: 'text' }>[];
-  return { work, answer, text: answer.map((s) => s.text).join('').trim(), at: answer[0]?.at };
+  // How long the answer is, trimmed; joining it all on every streamed token only to measure it cost as much as the text.
+  return { work, answer, chars: trimmedLength(answer), at: answer[0]?.at };
 }
 
 function duration(ms: number) {
@@ -190,8 +294,16 @@ function useElapsed(since: number, live: boolean) {
   return Math.max(0, now - since);
 }
 
+const TAIL = 300;
+
 /** The end of a stretch of text on one line, so the newest words stay in view as it streams. */
-const tail = (text: string) => text.replace(/\s+/g, ' ').trim().slice(-300);
+function tail(text: string) {
+  // Only the end is shown, so only the end is tidied: what's left of the last 600 characters, once
+  // tidied, ends the same as the whole text tidied, and is the answer when it's long enough.
+  const end = text.length > TAIL * 2 ? text.slice(-TAIL * 2).replace(/\s+/g, ' ').trim() : null;
+  if (end != null && end.length > TAIL) return end.slice(-TAIL);
+  return text.replace(/\s+/g, ' ').trim().slice(-TAIL);
+}
 
 /**
  * What the model is doing right now, in one line: the running call, the end of its streaming
@@ -264,7 +376,7 @@ function Work({
   const { colors } = useTheme();
   const elapsed = useElapsed(since, working);
   // Worked out again as the reply streams, but handed on only when the sites change.
-  const found = sitesOf(content);
+  const found = streamedSites(content);
   const siteKey = `${found.searched}:${found.sites.map((s) => s.host).join(' ')}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const { sites, searched } = useMemo(() => found, [siteKey]);
@@ -421,20 +533,26 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   // token: what's read off its parts is worked out again only when they change.
   const { content, reasoning, thoughtMs } = message;
   const assistant = message.role === 'assistant';
+  // A reply's whole text is only wanted once it's done (to copy it, and for its files).
+  const streamingReply = assistant && message.status === 'streaming';
   const parts = useMemo(() => {
     const tools = content.filter((p): p is ToolPart => p.type === 'tool');
     return {
-      text: messageText({ content }),
+      text: streamingReply ? '' : messageText({ content }),
       images: content.filter((p): p is ImagePart => p.type === 'image'),
       files: content.filter((p): p is FilePart => p.type === 'file'),
-      segments: assistant ? segmentsOf(content, reasoning, thoughtMs) : [],
+      segments: assistant ? (reasoning ? segmentsOf(content, reasoning, thoughtMs) : streamedSegments(content)) : [],
       // Questions waiting on the user show under the work rather than in it, where folding could hide them.
       asking: tools.filter((p) => p.name === 'ask_user' && p.status === 'running'),
       // A plan being written or waiting for approval shows there too; once decided it folds into the work.
       planning: tools.filter((p) => p.name === 'exit_plan_mode' && (p.status === 'writing' || p.status === 'running')),
     };
-  }, [content, reasoning, thoughtMs, assistant]);
+  }, [content, reasoning, thoughtMs, assistant, streamingReply]);
   const { text, images, files, segments, asking, planning } = parts;
+  // Gathered at the end of the turn, since the calls that made them fold away with the work.
+  const finished = message.status === 'done';
+  const sources = useMemo(() => (assistant && finished ? sourcesOf(content) : []), [assistant, finished, content]);
+  const made = useMemo(() => (assistant && !streamingReply ? filesOf(content) : []), [assistant, streamingReply, content]);
 
   const copy = async () => {
     await Clipboard.setStringAsync(text);
@@ -520,7 +638,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   // Compact and normal fold a reply's thinking away with its other work.
   const brief = detail === 'compact' || detail === 'normal';
   const split = splitWork(segments, brief);
-  const answered = !!split?.text && (!streaming || split.text.length > ANSWER_CHARS);
+  const answered = !!split?.chars && (!streaming || split.chars > ANSWER_CHARS);
   const working = streaming && !answered;
   // Compact and normal start folded; detailed shows the work until the answer comes; verbose keeps it.
   const workOpen = workOverride ?? (detail === 'verbose' || (detail === 'detailed' && !answered));
@@ -541,9 +659,6 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   // answer from what it has. Local chats only (remote ones have no onRegenerate).
   const canAnswerNow =
     working && !!onRegenerate && segments.some((s) => s.kind !== 'text') && (split ? true : lastSeg?.kind !== 'text');
-  const sources = message.status === 'done' ? sourcesOf(message.content) : [];
-  // Gathered at the end of the turn, since the calls that made them fold away with the work.
-  const made = streaming ? [] : filesOf(message.content);
 
   const render = (seg: Segment, i: number) =>
     seg.kind === 'tool' ? (

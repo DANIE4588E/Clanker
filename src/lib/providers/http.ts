@@ -64,15 +64,23 @@ export async function* readLines(res: { body: ReadableStream<Uint8Array> | null 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // How much of the buffer is known to hold no line break, so a long line arriving over many
+  // chunks isn't searched from its start each time.
+  let searched = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
+    // Lines are read off by position and the rest kept once per chunk, not copied once per line.
+    let start = 0;
     let nl: number;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      yield buffer.slice(0, nl).replace(/\r$/, '');
-      buffer = buffer.slice(nl + 1);
+    while ((nl = buffer.indexOf('\n', Math.max(start, searched))) >= 0) {
+      const line = buffer.slice(start, nl);
+      yield line.endsWith('\r') ? line.slice(0, -1) : line;
+      start = nl + 1;
     }
+    if (start) buffer = buffer.slice(start);
+    searched = buffer.length;
   }
   buffer += decoder.decode();
   if (buffer) yield buffer;

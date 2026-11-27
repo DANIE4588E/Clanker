@@ -57,7 +57,7 @@ let studyAdded = false;
 const study = { studyAvailable: () => studyAdded };
 const commands = load('commands.ts', { './plugins/catalog': catalog, './quotes': quotes, './study': study });
 const mentions = load('mentions.ts', {
-  '@/store/chats': { useChats: { getState: () => ({ conversations }) } },
+  '@/store/chats': { useChats: { getState: () => ({ conversations }) }, messageCount: (c) => c.messages.length },
   '@/store/library': { useLibrary: { getState: () => ({ deleted: {}, purged: {} }) } },
   '@/store/skills': {
     useSkills: { getState: () => ({ skills: { 'pdf-tools': { name: 'pdf-tools', description: 'PDFs', enabled: true } } }) },

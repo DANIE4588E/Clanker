@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from hermes_runs_metrics import HELPER, patch_source
+from hermes_runs_metrics import HELPER, NativeSupport, patch_source
 
 
 SOURCE = '''def _durable_run_status(self):
@@ -52,6 +52,10 @@ class MetricsForwarding(unittest.TestCase):
         self.assertIn('await _clanker_metrics_task', result)
         with self.assertRaises(ValueError):
             patch_source(SOURCE.replace('extra = extra or {}', 'unknown = 1'))
+
+    def test_a_hermes_that_publishes_usage_itself_is_left_alone(self):
+        with self.assertRaises(NativeSupport):
+            patch_source(SOURCE + '\ndef _usage(agent):\n    return usage_stats(agent)\n')
 
 
 if __name__ == '__main__':

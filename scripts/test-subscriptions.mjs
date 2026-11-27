@@ -28,6 +28,7 @@ function loadSrc(relPath, extraDeps = {}) {
     const deps = {
       'expo/fetch': { fetch },
       'react-native': { Platform: { OS: 'android' } },
+      'expo-crypto': { getRandomValues: (array) => crypto.webcrypto.getRandomValues(array) },
       ...extraDeps,
     };
     vm.runInThisContext(`(function(require,module,exports){${code}\n})`, { filename: abs })(
@@ -86,6 +87,33 @@ test('parsePastedAuthCode handles code#state, callback URLs, and plain codes', (
     { code: 'xyz', state: 'st1' }
   );
   assert.deepEqual(oauth.parsePastedAuthCode('  plain_code  '), { code: 'plain_code' });
+});
+
+test('Claude sign-in exchanges a pasted code only when its state is this sign-in’s', async () => {
+  const posted = [];
+  const fetch = async (url, init) => {
+    posted.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }) };
+  };
+  const oauth = loadSrc('lib/subscriptions/oauth', { 'expo/fetch': { fetch } });
+  const session = oauth.buildClaudeAuthSession();
+  const { state } = session.pkce;
+
+  await assert.rejects(oauth.exchangeClaudeAuthCode('the-code#someone-elses-state', session), /different sign-in/);
+  await assert.rejects(
+    oauth.exchangeClaudeAuthCode('https://console.anthropic.com/oauth/code/callback?code=the-code&state=forged', session),
+    /different sign-in/
+  );
+  assert.equal(posted.length, 0, 'a code from another sign-in is never exchanged');
+
+  // The page's `code#state`, as normally pasted.
+  assert.equal((await oauth.exchangeClaudeAuthCode(`the-code#${state}`, session)).accessToken, 'at');
+  // Only the code: still works, with this sign-in's state.
+  await oauth.exchangeClaudeAuthCode('the-code', session);
+  assert.deepEqual(posted.map((b) => [b.code, b.state]), [
+    ['the-code', state],
+    ['the-code', state],
+  ]);
 });
 
 test('CLI credential importers parse Codex and Claude files', () => {
@@ -430,6 +458,9 @@ test('parseAntigravityCallback extracts the code and rejects errors or state mis
     /access_denied/
   );
   assert.throws(() => oauth.parseAntigravityCallback('http://127.0.0.1:41783/callback', 'st1'), /No authorization code/i);
+  // A redirect that leaves out the state is refused like a wrong one.
+  assert.throws(() => oauth.parseAntigravityCallback('http://127.0.0.1:41783/callback?code=x', 'st1'), /state mismatch/i);
+  assert.throws(() => oauth.parseAntigravityCallback('http://127.0.0.1:41783/callback?code=x&state=', 'st1'), /state mismatch/i);
 });
 
 test('parseAntigravityImport handles JSON blobs, ya29 tokens, and raw refresh tokens', () => {
@@ -779,4 +810,115 @@ test('antigravity adapter posts the strict envelope and parses nested SSE chunks
     { id: 'gpt-oss-120b-medium', contextLength: 131_072 },
     { id: 'gemini-3-pro', efforts: ['low', 'high'], contextLength: 1_000_000 },
   ]);
+});
+
+// ---- Endpoint headers in the keychain -----------------------------------------------------------
+
+/** A keychain that keeps items in memory, refusing writes while `failing`. */
+function fakeSecureStore() {
+  const items = new Map();
+  const store = {
+    items,
+    failing: false,
+    getItemAsync: async (k) => items.get(k) ?? null,
+    setItemAsync: async (k, v) => {
+      if (store.failing) throw new Error('keystore unavailable');
+      if (!/^[A-Za-z0-9._-]+$/.test(k)) throw new Error(`invalid key ${k}`);
+      items.set(k, v);
+    },
+    deleteItemAsync: async (k) => void items.delete(k),
+  };
+  return store;
+}
+
+/**
+ * The settings store as far as endpoint headers go: a zustand store persisted to `disk` (a Map of
+ * JSON text) that leaves out headers the keychain holds, as src/store/settings.ts does.
+ */
+function launchSettings(disk, secureStore) {
+  const { create } = require('zustand');
+  const { persist, createJSONStorage } = require('zustand/middleware');
+  const secrets = loadSrc('lib/secrets', { 'expo-secure-store': secureStore });
+  const storage = createJSONStorage(() => ({
+    getItem: (k) => disk.get(k) ?? null,
+    setItem: (k, v) => void disk.set(k, v),
+    removeItem: (k) => void disk.delete(k),
+  }));
+  const useSettings = create()(
+    persist((set) => ({ endpoints: [], setEndpoints: (endpoints) => set({ endpoints }) }), {
+      name: 'settings',
+      storage,
+      version: 3,
+      partialize: (s) => ({ ...s, endpoints: s.endpoints.map(secrets.persistedEndpoint) }),
+    })
+  );
+  secrets.endpointHeaderSecrets.attach(useSettings);
+  return { secrets, useSettings, saved: () => JSON.parse(disk.get('settings')).state.endpoints };
+}
+
+const settle = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 5));
+};
+
+const SECRET_HEADERS = { Authorization: 'Bearer secret', 'CF-Access-Client-Secret': 'x'.repeat(3000) };
+
+test('endpoint headers move from settings.json to the keychain on first launch, and come back on the next', async () => {
+  const endpoints = [{ id: 'e1', baseUrl: 'https://a' }, { id: 'e2', baseUrl: 'https://b', headers: SECRET_HEADERS }];
+  const disk = new Map([['settings', JSON.stringify({ version: 3, state: { endpoints } })]]);
+  const keychain = fakeSecureStore();
+
+  // First launch after the upgrade: requests still have the headers, and the file loses them.
+  let app = launchSettings(disk, keychain);
+  await app.secrets.endpointHeaderSecrets.ready();
+  await settle();
+  assert.deepEqual(app.useSettings.getState().endpoints[1].headers, SECRET_HEADERS);
+  assert.ok(!disk.get('settings').includes('Bearer secret'), 'no header left in settings.json');
+  assert.equal(app.saved()[1].headers, undefined);
+  // Larger than one Android keychain item, so it's split.
+  assert.match(keychain.items.get('endpoint_headers_e2'), /^chunks:/);
+  assert.equal(keychain.items.has('endpoint_headers_e1'), false);
+
+  // Next launch: read back from the keychain.
+  app = launchSettings(disk, keychain);
+  const stale = { ...app.useSettings.getState().endpoints[1] };
+  assert.equal(stale.headers, undefined, 'not loaded yet');
+  // A request made before then waits for them.
+  assert.deepEqual((await app.secrets.withSavedHeaders(stale)).headers, SECRET_HEADERS);
+  await settle();
+  assert.deepEqual(app.useSettings.getState().endpoints[1].headers, SECRET_HEADERS);
+  // An endpoint given headers, even none (the editor's draft), is used as it is.
+  assert.deepEqual((await app.secrets.withSavedHeaders({ id: 'e2', headers: {} })).headers, {});
+
+  // Changing and clearing headers follows into the keychain.
+  const [e1, e2] = app.useSettings.getState().endpoints;
+  app.useSettings.getState().setEndpoints([{ ...e1, headers: { 'X-Key': 'k' } }, { ...e2, headers: {} }]);
+  await settle();
+  assert.equal(keychain.items.get('endpoint_headers_e1'), JSON.stringify({ 'X-Key': 'k' }));
+  assert.equal(keychain.items.has('endpoint_headers_e2'), false);
+  assert.equal(keychain.items.has('endpoint_headers_e2_0'), false);
+  assert.ok(!disk.get('settings').includes('X-Key'));
+
+  // Removing an endpoint removes its headers.
+  app.useSettings.getState().setEndpoints([e2]);
+  await settle();
+  assert.equal(keychain.items.has('endpoint_headers_e1'), false);
+});
+
+test('endpoint headers stay in settings.json while the keychain refuses them', async () => {
+  const endpoints = [{ id: 'e1', baseUrl: 'https://a', headers: { Authorization: 'Bearer secret' } }];
+  const disk = new Map([['settings', JSON.stringify({ version: 3, state: { endpoints } })]]);
+  const keychain = fakeSecureStore();
+  keychain.failing = true;
+  let app = launchSettings(disk, keychain);
+  await settle();
+  app.useSettings.setState({});
+  assert.deepEqual(app.saved()[0].headers, { Authorization: 'Bearer secret' }, 'kept rather than lost');
+  assert.deepEqual(app.useSettings.getState().endpoints[0].headers, { Authorization: 'Bearer secret' });
+
+  // A later launch, with the keychain working again, finishes the move.
+  keychain.failing = false;
+  app = launchSettings(disk, keychain);
+  await settle();
+  assert.equal(app.saved()[0].headers, undefined);
+  assert.equal(keychain.items.get('endpoint_headers_e1'), JSON.stringify({ Authorization: 'Bearer secret' }));
 });

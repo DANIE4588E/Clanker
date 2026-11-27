@@ -2,7 +2,7 @@ import type Feather from '@expo/vector-icons/Feather';
 import type { ComponentProps } from 'react';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
-import { messageText, useChatList, useChats, type Conversation } from '@/store/chats';
+import { messageCount, messageText, useChatList, useChats, type Conversation } from '@/store/chats';
 import { useProjects, type Project } from '@/store/projects';
 import { resolveTaskModel, useSettings } from '@/store/settings';
 import { SUGGESTION_INTERVAL, suggestionsDue, useSuggestionCache } from '@/store/suggestions';
@@ -23,7 +23,7 @@ export type PromptSuggestion = { summary: string; prompt: string; icon: typeof S
 function suggestionChatVisible(
   chat: Conversation, projects: Record<string, Project>, currentId: string | null, projectId: string | null | undefined
 ) {
-  if (chat.id === currentId || chat.memory === false || chat.archivedAt || !chat.messages.length) return false;
+  if (chat.id === currentId || chat.memory === false || chat.archivedAt || !messageCount(chat)) return false;
   if (projectId) return chat.projectId === projectId;
   // As with chat lookup, project-only memory must never escape into the shared pool.
   return !chat.projectId || projects[chat.projectId]?.memory !== 'project';

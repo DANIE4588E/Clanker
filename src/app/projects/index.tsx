@@ -5,7 +5,7 @@ import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useProjectMenu } from '@/components/ProjectMenu';
 import { useTheme } from '@/lib/theme';
-import { useChatList } from '@/store/chats';
+import { messageCount, useChatList } from '@/store/chats';
 import { useProjects, type Project } from '@/store/projects';
 
 function projectDate(ms: number) {
@@ -26,7 +26,7 @@ export default function ProjectsScreen() {
     // A project's activity is its latest chat, or its own last edit.
     const active = new Map<string, number>();
     for (const c of Object.values(conversations)) {
-      if (c.projectId && c.messages.length) active.set(c.projectId, Math.max(active.get(c.projectId) ?? 0, c.updatedAt));
+      if (c.projectId && messageCount(c)) active.set(c.projectId, Math.max(active.get(c.projectId) ?? 0, c.updatedAt));
     }
     const q = query.trim().toLowerCase();
     return Object.values(projects)

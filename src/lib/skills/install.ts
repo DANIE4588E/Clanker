@@ -1,7 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8 } from 'fflate';
 import { fetch } from '../net';
+import { unzipBounded, ZipLimitError } from '../zip';
 import { MAX_SKILL_BYTES, MAX_SKILL_FILES, parseSkillMd, saveSkill, SKILL_FILE, SkillError, slugify } from './index';
 
 /**
@@ -37,6 +38,40 @@ async function get(url: string, accept?: string) {
     throw new SkillError(limited ? 'GitHub is limiting requests from this network. Try again in a while.' : `${url} answered ${res.status}.`);
   }
   return res;
+}
+
+// Largest archive or SKILL.md downloaded from a link (the same limit as a file picked on the phone).
+const MAX_DOWNLOAD_BYTES = MAX_SKILL_BYTES * 2;
+
+/** A response's body, refusing to read past `maxBytes` (a server can lie about, or omit, its length). */
+async function readCapped(res: Awaited<ReturnType<typeof fetch>>, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Uint8Array> {
+  const tooLarge = () => new SkillError(`That download is larger than ${Math.round(maxBytes / 1024 / 1024)} MB, too large for a skill.`);
+  if (Number(res.headers.get('content-length')) > maxBytes) throw tooLarge();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > maxBytes) throw tooLarge();
+    return bytes;
+  }
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    bytes.set(c, at);
+    at += c.length;
+  }
+  return bytes;
 }
 
 // ---- GitHub --------------------------------------------------------------------------------
@@ -109,8 +144,10 @@ async function fromGitHub({ owner, repo, ref, path }: GitHubRef): Promise<SkillP
 export function fromZip(bytes: Uint8Array, origin: string, nameHint = ''): SkillPackage[] {
   let entries: Record<string, Uint8Array>;
   try {
-    entries = unzipSync(bytes);
-  } catch {
+    // Capped, so a small archive that expands to gigabytes is refused instead of exhausting memory.
+    entries = unzipBounded(bytes, { filter: (f) => !/(^|\/)(__MACOSX|\.DS_Store)(\/|$)/.test(f.name) });
+  } catch (e) {
+    if (e instanceof ZipLimitError) throw new SkillError(`${e.message.replace(/\.$/, '')}, too large for a skill.`);
     throw new SkillError("That file isn't a zip archive.");
   }
   const paths = Object.keys(entries).filter((p) => !p.endsWith('/') && !/(^|\/)(__MACOSX|\.DS_Store)(\/|$)/.test(p));
@@ -147,9 +184,9 @@ export async function findSkills(input: string): Promise<SkillPackage[]> {
   const name = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '');
   const type = res.headers.get('content-type') ?? '';
   if (/\.(zip|skill)$/i.test(name) || /zip|octet-stream/.test(type)) {
-    return fromZip(new Uint8Array(await res.arrayBuffer()), url, name.replace(/\.(zip|skill)$/i, ''));
+    return fromZip(await readCapped(res), url, name.replace(/\.(zip|skill)$/i, ''));
   }
-  return fromSkillMd(await res.text(), url, dirOf(new URL(url).pathname).split('/').pop());
+  return fromSkillMd(strFromU8(await readCapped(res)), url, dirOf(new URL(url).pathname).split('/').pop());
 }
 
 /** The skills in a file the user picks: a .zip or .skill archive, or a SKILL.md. Empty when cancelled. */
@@ -158,7 +195,7 @@ export async function pickSkillFile(): Promise<SkillPackage[]> {
   if (result.canceled) return [];
   const asset = result.assets[0];
   const name = asset.name || 'skill';
-  if (asset.size && asset.size > MAX_SKILL_BYTES * 2) throw new SkillError('That file is too large for a skill.');
+  if (asset.size && asset.size > MAX_DOWNLOAD_BYTES) throw new SkillError('That file is too large for a skill.');
   const file = new File(asset.uri);
   if (/\.(md|markdown|txt)$/i.test(name)) return fromSkillMd(await file.text(), name, name.replace(/\.[^.]+$/, ''));
   return fromZip(await file.bytes(), name, name.replace(/\.[^.]+$/, ''));

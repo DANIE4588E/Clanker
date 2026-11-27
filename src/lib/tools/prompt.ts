@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { useChats, type Goal } from '@/store/chats';
 import { useSettings } from '@/store/settings';
-import { compressedKeys, formatTokens, historyOf, historyTokens, unitsOf } from '../context';
+import { compressedKeys, formatTokens, historyTokens, historyUnits } from '../context';
 import { describeJob, jobsOf } from '../jobs';
 import { currentMemories, memoriesFor, memoryDiff, memoryOn, memorySection } from '../memory';
 import { PLAN_RULES, todoText } from '../planning';
@@ -277,7 +277,7 @@ function goalLine(goal: Goal) {
 export function writeContextNote(opts: { conversationId: string; replyId: string; budget: number }) {
   const conversation = useChats.getState().conversations[opts.conversationId];
   if (!conversation) return;
-  const units = unitsOf(historyOf(conversation, opts.replyId));
+  const units = historyUnits(conversation, opts.replyId);
   const last = units[units.length - 1];
   // Closing assistant text units aren't attached to notes; leave prior notes untouched when continuing mid-text.
   if (!last || last.kind === 'text') return;

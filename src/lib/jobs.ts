@@ -1,6 +1,7 @@
 import { useChats } from '@/store/chats';
 import type { ToolOutcome } from './tools';
 import { markObserved } from './tools/observe';
+import { workspaceFilesChanged } from './workspace';
 
 /**
  * Background jobs: scripts and shell commands the model started with `background: true`. They
@@ -23,12 +24,33 @@ type Job = {
   outcome?: ToolOutcome;
   /** Whether the model has read the result with job_output. */
   collected: boolean;
+  /** When the job was first seen collected (see prune). */
+  collectedAt?: number;
   controller: AbortController;
   done: Promise<void>;
+  /** Called once when the job finishes; see waitForJob. */
+  waiters: Set<() => void>;
 };
 
 const MAX_RUNNING = 4;
 const jobs = new Map<string, Job>();
+
+// Collected jobs that finished this long ago drop out of the chat's job list (see jobsOf).
+const STALE_MS = 30 * 60_000;
+
+/**
+ * Forgets finished jobs, with their output, once the model has collected them and they have been
+ * out of the job list for a while; until then job_output can still read them again.
+ */
+function prune() {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (job.status === 'running' || !job.collected) continue;
+    // job_output and job_kill mark a job collected; it's timed from when that's first seen here.
+    job.collectedAt ??= now;
+    if ((job.finishedAt ?? Infinity) < now - STALE_MS && job.collectedAt < now - STALE_MS) jobs.delete(id);
+  }
+}
 
 function newId() {
   for (;;) {
@@ -38,6 +60,7 @@ function newId() {
 }
 
 export function runningJobs() {
+  prune();
   return [...jobs.values()].filter((j) => j.status === 'running').length;
 }
 
@@ -67,6 +90,7 @@ export function startJob(opts: {
     collected: false,
     controller,
     done: Promise.resolve(),
+    waiters: new Set(),
   };
   jobs.set(id, job);
   useChats.getState().patchTool(opts.conversationId, opts.messageId, opts.toolId, { background: { job: id, status: 'running' } });
@@ -78,10 +102,17 @@ export function startJob(opts: {
       job.finishedAt = Date.now();
       if (job.status === 'running') job.status = outcome.isError ? 'error' : 'done';
       if (outcome.files?.length) markObserved(job.conversationId, outcome.files);
+      // Scripts and commands write files.
+      workspaceFilesChanged();
       useChats.getState().patchTool(job.conversationId, job.messageId, job.toolId, {
         background: { job: id, status: job.status, output: outcome.output },
         ...(outcome.files?.length ? { files: outcome.files } : {}),
       });
+    })
+    .finally(() => {
+      const waiters = [...job.waiters];
+      job.waiters.clear();
+      for (const wake of waiters) wake();
     });
   return job;
 }
@@ -101,14 +132,17 @@ export function killJob(id: string) {
 /** Resolves when the job finishes, or after `ms`, or when `signal` aborts. */
 export function waitForJob(job: Job, ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
+    // Whichever comes first lets go of the others, so waits that time out don't pile up on a long job.
     const stop = () => {
       clearTimeout(timer);
       signal.removeEventListener('abort', stop);
+      job.waiters.delete(stop);
       resolve();
     };
+    const timer = setTimeout(stop, ms);
     signal.addEventListener('abort', stop);
-    job.done.then(stop);
+    if (job.status !== 'running' && job.finishedAt != null) stop();
+    else job.waiters.add(stop);
   });
 }
 
@@ -128,7 +162,8 @@ export function describeJob(job: Job) {
 
 /** Jobs started in a chat, newest first. Collected jobs that finished long ago are left out. */
 export function jobsOf(conversationId: string) {
-  const stale = Date.now() - 30 * 60_000;
+  prune();
+  const stale = Date.now() - STALE_MS;
   return [...jobs.values()]
     .filter((j) => j.conversationId === conversationId && !(j.collected && (j.finishedAt ?? Infinity) < stale))
     .sort((a, b) => b.startedAt - a.startedAt);

@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Image } from 'expo-image';
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { attachmentUri } from '@/lib/attachments';
 import { openWorkspaceFile, shareWorkspaceFile } from '@/lib/openFile';
@@ -184,8 +184,11 @@ function ToolCallInner({ part }: { part: ToolPart }) {
   const running = writing || part.status === 'running' || job?.status === 'running';
   const failed = part.status === 'error' || job?.status === 'error';
   const output = job?.output ?? part.output;
-  const label = describeCall(part.name, part.input);
-  const changes = lineChanges(part.name, part.input);
+  // Worked out again only when the input changes, not when the call's status or output does.
+  const { label, changes } = useMemo(
+    () => ({ label: describeCall(part.name, part.input), changes: lineChanges(part.name, part.input) }),
+    [part.name, part.input]
+  );
 
   return (
     <View style={styles.container}>

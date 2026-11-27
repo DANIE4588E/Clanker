@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { hostname, networkInterfaces } from 'node:os';
 import qrcode from 'qrcode-generator';
+import { restrictToOwner } from './persistence.mjs';
 
 const KIND_LABELS = { hermes: 'Hermes', harness: 'Harness' };
 const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
@@ -52,5 +53,7 @@ ${addresses.map((a, i) => `<label>Address · ${escape(a.name)}<input id="address
 /** Pairing is a private local file, never an unauthenticated HTTP endpoint. */
 export async function writePairingPage(file, options) {
   await writeFile(file, pairingHtml(options), { mode: 0o600 });
+  // The page holds the bridge token; mode 0600 means nothing on Windows.
+  await restrictToOwner(file);
   return file;
 }

@@ -11,6 +11,7 @@ import { GoalSheetHost } from '@/components/GoalSheet';
 import { OverlayHost } from '@/components/OverlayHost';
 import { ReplyNotifications } from '@/components/ReplyNotifications';
 import { ScriptRuntime } from '@/components/ScriptRuntime';
+import { MermaidHost } from '@/components/study/mermaid';
 import { UpdateCheck } from '@/components/Updates';
 import { resumeInterruptedReplies } from '@/lib/chat';
 // Keeps the On-device endpoint in step with downloaded models.
@@ -36,9 +37,17 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, [toolsOn]);
 
-  // Replies cut off when the app was last closed carry on where they stopped.
+  // Replies cut off when the app was last closed carry on where they stopped, once the first frame
+  // is up and the app is idle: picking one up reads its chat and starts a request.
   useEffect(() => {
-    resumeInterruptedReplies();
+    let idle: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      idle = requestIdleCallback(() => resumeInterruptedReplies(), { timeout: 1500 });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      cancelIdleCallback(idle);
+    };
   }, []);
 
   useEffect(() => {
@@ -128,6 +137,8 @@ export default function RootLayout() {
             <UpdateCheck />
             <ReplyNotifications />
             {runtimeOn && <ScriptRuntime />}
+            {/* Draws Mermaid diagrams for every chat, unseen; nothing until one needs drawing. */}
+            <MermaidHost />
           </ThemeProvider>
         </SafeAreaProvider>
       </KeyboardProvider>

@@ -1,10 +1,10 @@
 import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import { fetch } from '@/lib/net';
-import { usePlugins, type McpConnection, type McpToolInfo, type PluginAccount } from '@/store/plugins';
+import { pluginSecretsReady, usePlugins, type McpConnection, type McpToolInfo, type PluginAccount } from '@/store/plugins';
 import { runExclusiveRefresh, subscriptionAuth, type SubscriptionCredentials } from '../subscriptions/credentials';
 import { generatePkce } from '../subscriptions/pkce';
-import { appScheme, formBody, readRedirect, slot } from './auth';
+import { appScheme, formBody, readRedirect, slot, tokenFresh } from './auth';
 import type { PluginDef } from './catalog';
 import { PROVIDERS, type McpConfig, type ProviderId } from './providers';
 
@@ -56,16 +56,37 @@ async function getJson(url: string): Promise<Record<string, any> | null> {
   }
 }
 
-async function firstJson(urls: string[]) {
-  for (const url of urls) {
-    const json = await getJson(url);
-    if (json) return json;
-  }
-  return null;
-}
-
 /** "/mcp" stays "/mcp"; "/" becomes "" — for the path-suffixed well-known URLs. */
 const pathOf = (url: URL) => url.pathname.replace(/\/+$/, '');
+
+/** Whether `value` is an absolute https URL. Sign-in settings and secrets go nowhere else. */
+export function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether two URLs name the same thing, as RFC 9728 and RFC 8414 compare them ("identical"),
+ * after parsing: so case in the host, and "https://a.com" against "https://a.com/", don't count.
+ */
+export function sameUrl(a: unknown, b: unknown) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    x.hash = '';
+    y.hash = '';
+    return x.href === y.href;
+  } catch {
+    return false;
+  }
+}
+
+const BAD_SETTINGS = 'The server’s sign-in settings don’t check out, so it wasn’t connected.';
 
 // ---- JSON-RPC over Streamable HTTP --------------------------------------------------------------
 
@@ -193,7 +214,7 @@ export async function mcpRequest<T = any>(provider: ProviderId, method: string, 
         throw e instanceof HttpError ? new Error(`${title(provider)} returned ${e.status}: ${e.message}`) : e;
       }
       sessions.delete(provider);
-      if (e.status === 401 && connection.oauth) token = await mcpToken(provider, true);
+      if (e.status === 401 && connection.oauth) token = await mcpToken(provider, token);
       else if (e.status !== 404 && e.status !== 400) throw new Error(`${title(provider)} returned ${e.status}: ${e.message}`);
     }
   }
@@ -234,28 +255,60 @@ export async function discover(url: string): Promise<McpDiscovery> {
     throw new Error(`Couldn’t reach the server: ${e instanceof Error ? e.message : e}`);
   }
   const u = new URL(url);
+
+  // The protected resource's metadata (RFC 9728): where the server says, else the well-known URLs.
+  // Its `resource` must be this server (§3.3), or a document elsewhere could send the sign-in, and
+  // the tokens, to an authorization server of its choosing.
   const metadataUrl = www.match(/resource_metadata="([^"]+)"/)?.[1];
-  const resource = await firstJson(
-    [metadataUrl, `${u.origin}/.well-known/oauth-protected-resource${pathOf(u)}`, `${u.origin}/.well-known/oauth-protected-resource`].filter(
-      (x): x is string => !!x
-    )
-  );
-  const issuer = new URL(resource?.authorization_servers?.[0] ?? u.origin);
-  const as = await firstJson([
+  let resource: Record<string, any> | null = null;
+  let foundOther = false;
+  for (const candidate of [metadataUrl, `${u.origin}/.well-known/oauth-protected-resource${pathOf(u)}`, `${u.origin}/.well-known/oauth-protected-resource`]) {
+    if (!candidate || !isHttpsUrl(candidate)) continue;
+    const json = await getJson(candidate);
+    if (!json) continue;
+    if (sameUrl(json.resource, url)) {
+      resource = json;
+      break;
+    }
+    foundOther = true;
+  }
+  if (!resource && foundOther) throw new Error(BAD_SETTINGS);
+
+  // The authorization server's metadata (RFC 8414), whose `issuer` must be the server it was
+  // looked up for (§3.3). Servers that name none (or have no resource metadata, as in MCP
+  // 2025-03-26) are their own.
+  const issuerId: unknown = resource?.authorization_servers?.[0] ?? u.origin;
+  if (!isHttpsUrl(issuerId)) throw new Error(BAD_SETTINGS);
+  const issuer = new URL(issuerId);
+  let as: Record<string, any> | null = null;
+  for (const candidate of [
     `${issuer.origin}/.well-known/oauth-authorization-server${pathOf(issuer)}`,
     `${issuer.origin}/.well-known/oauth-authorization-server`,
     `${issuer.origin}/.well-known/openid-configuration${pathOf(issuer)}`,
     `${issuer.origin}${pathOf(issuer)}/.well-known/openid-configuration`,
-  ]);
+  ]) {
+    as = await getJson(candidate);
+    if (as) break;
+  }
   if (!as?.authorization_endpoint || !as?.token_endpoint) throw new Error('The server’s sign-in settings couldn’t be found.');
+  const optional = (v: unknown) => v === undefined || v === null || isHttpsUrl(v);
+  if (
+    !sameUrl(as.issuer, issuerId) ||
+    !isHttpsUrl(as.authorization_endpoint) ||
+    !isHttpsUrl(as.token_endpoint) ||
+    !optional(as.registration_endpoint) ||
+    !optional(as.revocation_endpoint)
+  ) {
+    throw new Error(BAD_SETTINGS);
+  }
   const scope = www.match(/scope="([^"]+)"/)?.[1] ?? (Array.isArray(resource?.scopes_supported) ? resource.scopes_supported.join(' ') : undefined);
   return {
     needsAuth: true,
     resource: resource?.resource ?? url,
     authorizationEndpoint: as.authorization_endpoint,
     tokenEndpoint: as.token_endpoint,
-    registrationEndpoint: as.registration_endpoint,
-    revocationEndpoint: as.revocation_endpoint,
+    ...(as.registration_endpoint ? { registrationEndpoint: as.registration_endpoint } : {}),
+    ...(as.revocation_endpoint ? { revocationEndpoint: as.revocation_endpoint } : {}),
     ...(scope ? { scope } : {}),
   };
 }
@@ -329,14 +382,24 @@ const credsFrom = (data: TokenResponse, previous?: SubscriptionCredentials): Sub
   ...(data.expires_in ? { expiresAt: Date.now() + data.expires_in * 1000 } : {}),
 });
 
-/** A current access token for the server, refreshed when about to expire (or `force`d after a 401). */
-async function mcpToken(provider: ProviderId, force = false): Promise<string> {
-  const oauth = usePlugins.getState().mcp[provider]?.oauth;
-  const creds = await subscriptionAuth.get(slot(provider));
-  if (!oauth || !creds) throw new Error(`${title(provider)} isn’t connected. Ask the user to add it under Plugins in the sidebar.`);
-  const fresh = !creds.expiresAt || creds.expiresAt - 60_000 > Date.now();
-  if (!force && fresh) return creds.accessToken;
+/**
+ * A current access token for the server, refreshed when about to expire, or when the server just
+ * refused `rejected` (after a 401). The tokens are read again inside the refresh lock, since another
+ * request may have just refreshed them and the old refresh token may no longer be accepted.
+ */
+async function mcpToken(provider: ProviderId, rejected?: string): Promise<string> {
+  const notConnected = () => new Error(`${title(provider)} isn’t connected. Ask the user to add it under Plugins in the sidebar.`);
+  const stored = await subscriptionAuth.get(slot(provider));
+  if (!usePlugins.getState().mcp[provider]?.oauth || !stored) throw notConnected();
+  if (tokenFresh(stored) && stored.accessToken !== rejected) return stored.accessToken;
   const next = await runExclusiveRefresh(slot(provider), async () => {
+    const creds = await subscriptionAuth.get(slot(provider));
+    if (!creds) throw notConnected();
+    if (tokenFresh(creds) && creds.accessToken !== rejected) return creds;
+    // The client secret, if the server issued one, is read from the keychain on launch.
+    await pluginSecretsReady();
+    const oauth = usePlugins.getState().mcp[provider]?.oauth;
+    if (!oauth) throw notConnected();
     if (!creds.refreshToken) {
       usePlugins.getState().patchAccount(provider, { needsReconnect: true });
       throw new Error(`${title(provider)} access has expired. Ask the user to reconnect it under Plugins in the sidebar.`);
@@ -427,6 +490,7 @@ export async function connectMcp(plugin: PluginDef): Promise<PluginAccount | nul
   const provider = plugin.provider;
   const config = mcpConfig(provider) as McpConfig;
   sessions.delete(provider);
+  await pluginSecretsReady();
   const d = await discover(config.url);
   const state = usePlugins.getState();
 

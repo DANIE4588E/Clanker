@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { PluginId } from '@/lib/plugins/catalog';
 import type { ProviderId } from '@/lib/plugins/providers';
+import { SecretMirror, secretKey } from '@/lib/secrets';
 import { jsonFileStorage } from '@/lib/storage';
 
 /** A connected account. Its tokens live in the keychain (lib/plugins/auth). */
@@ -78,6 +79,72 @@ interface PluginsState {
   patchMcp: (provider: ProviderId, patch: Partial<McpConnection>) => void;
 }
 
+// OAuth client secrets (a person's own client, and those MCP servers register the app with) are
+// kept in the keychain; plugins.json leaves them out once they're there (lib/secrets).
+const clientSecretSlot = (provider: string) => secretKey('plugin_client_secret', provider);
+const mcpSecretSlot = (provider: string) => secretKey('plugin_mcp_secret', provider);
+
+type Secrets = Pick<PluginsState, 'clients' | 'mcp'>;
+
+function entries<T>(record: Partial<Record<ProviderId, T>>) {
+  return Object.entries(record) as [ProviderId, T | undefined][];
+}
+
+const pluginSecrets = new SecretMirror<Secrets>({
+  slots: (s) => [
+    ...entries(s.clients).map(([p]) => clientSecretSlot(p)),
+    ...entries(s.mcp).flatMap(([p, c]) => (c?.oauth ? [mcpSecretSlot(p)] : [])),
+  ],
+  values: (s) =>
+    Object.fromEntries([
+      ...entries(s.clients).flatMap(([p, c]) => (c?.secret ? [[clientSecretSlot(p), c.secret]] : [])),
+      ...entries(s.mcp).flatMap(([p, c]) => (c?.oauth?.clientSecret ? [[mcpSecretSlot(p), c.oauth.clientSecret]] : [])),
+    ]),
+  restore: (s, loaded) => {
+    let changed = false;
+    const clients = { ...s.clients };
+    for (const [p, c] of entries(s.clients)) {
+      const secret = c && c.secret === undefined ? loaded.get(clientSecretSlot(p)) : undefined;
+      if (c && secret) {
+        clients[p] = { ...c, secret };
+        changed = true;
+      }
+    }
+    const mcp = { ...s.mcp };
+    for (const [p, c] of entries(s.mcp)) {
+      const secret = c?.oauth && c.oauth.clientSecret === undefined ? loaded.get(mcpSecretSlot(p)) : undefined;
+      if (c?.oauth && secret) {
+        mcp[p] = { ...c, oauth: { ...c.oauth, clientSecret: secret } };
+        changed = true;
+      }
+    }
+    return changed ? { clients, mcp } : null;
+  },
+});
+
+/** Resolves once the client secrets have been read from the keychain, just after launch. */
+export const pluginSecretsReady = () => pluginSecrets.ready();
+
+/** The state as plugins.json saves it: without the secrets the keychain already holds. */
+function persisted(s: PluginsState) {
+  const clients = Object.fromEntries(
+    entries(s.clients).map(([p, c]) => {
+      if (!c?.secret || !pluginSecrets.isSaved(clientSecretSlot(p), c.secret)) return [p, c];
+      const { secret: _, ...rest } = c;
+      return [p, rest];
+    })
+  );
+  const mcp = Object.fromEntries(
+    entries(s.mcp).map(([p, c]) => {
+      const secret = c?.oauth?.clientSecret;
+      if (!c?.oauth || !secret || !pluginSecrets.isSaved(mcpSecretSlot(p), secret)) return [p, c];
+      const { clientSecret: _, ...oauth } = c.oauth;
+      return [p, { ...c, oauth }];
+    })
+  );
+  return { accounts: s.accounts, installed: s.installed, clients, mcp };
+}
+
 export const usePlugins = create<PluginsState>()(
   persist(
     (set, get) => ({
@@ -124,7 +191,7 @@ export const usePlugins = create<PluginsState>()(
       name: 'plugins',
       version: 2,
       storage: jsonFileStorage,
-      partialize: (s) => ({ accounts: s.accounts, installed: s.installed, clients: s.clients, mcp: s.mcp }),
+      partialize: persisted,
       migrate: (persisted, version) => {
         // Version 1 connected Notion, Linear, Todoist and ClickUp with pasted tokens; they now use
         // their MCP servers, so those connections go and the plugins are added again.
@@ -164,3 +231,5 @@ export const usePlugins = create<PluginsState>()(
     }
   )
 );
+
+pluginSecrets.attach(usePlugins);

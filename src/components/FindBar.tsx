@@ -4,7 +4,18 @@ import { Pressable, StyleSheet, Text, TextInput, View, type TextInputInstance } 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@/lib/theme';
-import { messageText, useChats } from '@/store/chats';
+import { messageText, useChats, type Message } from '@/store/chats';
+
+// Each message's text, lowercased, worked out once: the matches are looked for again with every
+// change to the chat (each streamed token) and every letter typed. Messages are replaced rather
+// than changed, so a message's text holds for as long as it does.
+const lowered = new WeakMap<Message, string>();
+
+function lowerText(m: Message) {
+  let text = lowered.get(m);
+  if (text == null) lowered.set(m, (text = messageText(m).toLowerCase()));
+  return text;
+}
 
 type Props = {
   conversationId: string;
@@ -31,7 +42,7 @@ export function FindBar({ conversationId, onClose, onChange }: Props) {
     useShallow((s) =>
       needle
         ? (s.conversations[conversationId]?.messages ?? [])
-            .filter((m) => messageText(m).toLowerCase().includes(needle))
+            .filter((m) => lowerText(m).includes(needle))
             .map((m) => m.id)
         : []
     )

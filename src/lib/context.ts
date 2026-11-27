@@ -114,6 +114,24 @@ export function unitsOf(messages: Message[]): Unit[] {
   return units;
 }
 
+// Each step of a reply reads the history's units several times (compression, the context note, the
+// request, the meter) while the messages stay the same. Messages are replaced rather than changed,
+// so units made from the same list hold until it changes.
+const unitCache = new WeakMap<Message[], Map<string, Unit[]>>();
+
+/**
+ * unitsOf(historyOf(conversation, replyId)), made once per version of the chat's messages. The
+ * units are shared, so they mustn't be changed.
+ */
+export function historyUnits(conversation: Conversation, replyId?: string): Unit[] {
+  let byReply = unitCache.get(conversation.messages);
+  if (!byReply) unitCache.set(conversation.messages, (byReply = new Map()));
+  const key = replyId ?? '';
+  let units = byReply.get(key);
+  if (!units) byReply.set(key, (units = unitsOf(historyOf(conversation, replyId))));
+  return units;
+}
+
 /** Blocks whose ends still exist, as unit index ranges, in order and without overlaps. */
 function applied(units: Unit[], blocks: CompressionBlock[]) {
   const index = new Map(units.map((u, i) => [u.key, i]));
@@ -342,7 +360,7 @@ export type ContextScope = {
 function load(scope: ContextScope) {
   const conversation = useChats.getState().conversations[scope.conversationId];
   if (!conversation) throw new ContextError('This chat no longer exists.');
-  const units = unitsOf(historyOf(conversation, scope.replyId));
+  const units = historyUnits(conversation, scope.replyId);
   const current = units.findIndex((u) => u.message.id === scope.replyId && u.calls.some((c) => c.step === scope.step));
   return { units, blocks: conversation.compressions ?? [], protectedFrom: current < 0 ? units.length : current };
 }
@@ -494,7 +512,7 @@ function mechanicalSummary(units: Unit[], blocks: CompressionBlock[], start: num
 export function historyTokens(conversationId: string, replyId: string) {
   const conversation = useChats.getState().conversations[conversationId];
   if (!conversation) return 0;
-  return visibleTokens(unitsOf(historyOf(conversation, replyId)), conversation.compressions ?? []);
+  return visibleTokens(historyUnits(conversation, replyId), conversation.compressions ?? []);
 }
 
 /**
@@ -506,7 +524,7 @@ export function historyTokens(conversationId: string, replyId: string) {
 export function autoCompress(conversationId: string, replyId: string, trigger: number, target: number) {
   const conversation = useChats.getState().conversations[conversationId];
   if (!conversation) return false;
-  const units = unitsOf(historyOf(conversation, replyId));
+  const units = historyUnits(conversation, replyId);
   let blocks = conversation.compressions ?? [];
   if (visibleTokens(units, blocks) <= trigger) return false;
 
@@ -567,7 +585,7 @@ export const COMPACT_HEADER =
 export function compactEnd(conversationId: string) {
   const conversation = useChats.getState().conversations[conversationId];
   if (!conversation) return null;
-  const units = unitsOf(historyOf(conversation));
+  const units = historyUnits(conversation);
   if (!units.length) return null;
   const ranges = applied(units, conversation.compressions ?? []);
   if (ranges.length === 1 && ranges[0].start === 0 && ranges[0].end === units.length - 1) return null;
@@ -582,7 +600,7 @@ export function compactEnd(conversationId: string) {
 export function compactHistory(conversationId: string, endKey: string, summary: string) {
   const conversation = useChats.getState().conversations[conversationId];
   if (!conversation) throw new ContextError('This chat no longer exists.');
-  const units = unitsOf(historyOf(conversation));
+  const units = historyUnits(conversation);
   const end = units.findIndex((u) => u.key === endKey);
   if (end < 0) throw new ContextError('The chat changed while it was being compacted. Try again.');
   const blocks = conversation.compressions ?? [];

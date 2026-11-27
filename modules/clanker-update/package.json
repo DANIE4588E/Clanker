@@ -1,0 +1,7 @@
+{
+  "name": "clanker-update",
+  "version": "1.0.0",
+  "description": "Checks that a downloaded Clanker update is signed by the same key as the installed app (Android only).",
+  "main": "index.ts",
+  "private": true
+}

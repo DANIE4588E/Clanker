@@ -15,6 +15,7 @@ import {
   type ProviderType,
 } from '@/lib/providers';
 import { formatTokens, parseTokens } from '@/lib/context';
+import { endpointHeaderSecrets } from '@/lib/secrets';
 import { apiKeys, uid } from '@/lib/storage';
 import { fonts, useTheme } from '@/lib/theme';
 import { resolveBudget, useSettings } from '@/store/settings';
@@ -35,6 +36,11 @@ function parseHeaders(text: string) {
   }
   return headers;
 }
+
+const formatHeaders = (headers: Record<string, string> | undefined) =>
+  Object.entries(headers ?? {})
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
 
 export default function EndpointScreen() {
   const { colors } = useTheme();
@@ -57,17 +63,28 @@ export default function EndpointScreen() {
   const [editing, setEditing] = useState<{ model: string; field: 'effort' | 'budget'; text: string } | null>(null);
   const [newModel, setNewModel] = useState('');
   const [modelFilter, setModelFilter] = useState('');
-  const [headersText, setHeadersText] = useState(
-    Object.entries(existing?.headers ?? {})
-      .map(([k, v]) => `${k}: ${v}`)
-      .join('\n')
-  );
+  const [headersText, setHeadersText] = useState(formatHeaders(existing?.headers));
+  // Headers come from the keychain just after launch; until then they're left as they are.
+  const [headersLoaded, setHeadersLoaded] = useState(() => !existing || existing.headers !== undefined || endpointHeaderSecrets.isReady());
   const [busy, setBusy] = useState<'fetch' | 'test' | null>(null);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [savedOnce, setSavedOnce] = useState(!!existing);
 
   const deletedRef = useRef(false);
   const persistRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (headersLoaded) return;
+    let active = true;
+    void endpointHeaderSecrets.ready().then(() => {
+      if (!active) return;
+      setHeadersText(formatHeaders(useSettings.getState().endpoints.find((e) => e.id === endpointId)?.headers));
+      setHeadersLoaded(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [headersLoaded, endpointId]);
 
   useEffect(() => {
     let active = true;
@@ -96,7 +113,7 @@ export default function EndpointScreen() {
     contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
     budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
     ...(type === 'openai' ? { effortParam } : {}),
-    headers: parseHeaders(headersText),
+    headers: headersLoaded ? parseHeaders(headersText) : undefined,
   });
 
   const canSave = !!baseUrl.trim() && models.length > 0;
@@ -116,7 +133,7 @@ export default function EndpointScreen() {
         contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
         budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
         ...(type === 'openai' ? { effortParam } : {}),
-        headers: parseHeaders(headersText),
+        headers: headersLoaded ? parseHeaders(headersText) : undefined,
       };
       useSettings.getState().upsertEndpoint(ep);
       if (keyLoaded) void apiKeys.set(ep.id, apiKey.trim());
@@ -126,7 +143,7 @@ export default function EndpointScreen() {
     if (!canSave) return;
     const timer = setTimeout(persist, 250);
     return () => clearTimeout(timer);
-  }, [endpointId, name, type, baseUrl, alts, apiKey, keyLoaded, models, efforts, contexts, budgets, effortParam, headersText, canSave]);
+  }, [endpointId, name, type, baseUrl, alts, apiKey, keyLoaded, models, efforts, contexts, budgets, effortParam, headersText, headersLoaded, canSave]);
 
   useEffect(() => () => persistRef.current(), []);
 

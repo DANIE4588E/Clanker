@@ -31,7 +31,7 @@ import { enabledSkills, useSkills } from '@/store/skills';
 import type { ImagePart, Source, ToolCall, ToolSpec } from '../providers';
 import { releaseWorker, runScript, type ScriptResult } from '../runtime';
 import { uid } from '../storage';
-import { formatSize, type Workspace, type WorkspaceEntry } from '../workspace';
+import { formatSize, workspaceFilesChanged, type Workspace, type WorkspaceEntry } from '../workspace';
 import { askUser } from './ask';
 import type { ToolEntry } from './catalog';
 import { describeCall, lineChanges } from './describe';
@@ -606,7 +606,7 @@ const runShell: Tool = {
   description:
     "Run a command with Android's /system/bin/sh in the workspace folder. Only the phone's built-in utilities exist " +
     '(typically ls, cat, cp, mv, rm, mkdir, find, grep, sed, awk, sort, uniq, wc, head, tail, tar, gzip, unzip, base64, md5sum, sha256sum, date, ...): ' +
-    'there is no python, node, git or package manager here, so use run_python / run_javascript for scripting. Commands run as the app, sandboxed to its own storage.',
+    'there is no python, node, git or package manager here, so use run_python / run_javascript for scripting. Commands run as the app with access to the app\'s private storage; stay inside the workspace.',
   parameters: {
     type: 'object',
     properties: {
@@ -965,7 +965,7 @@ const searchChatsTool: Tool = {
   },
   async run(input, { conversationId }) {
     const limit = Math.min(20, Math.max(1, Number(input.limit) || 8));
-    return { output: searchChats(str(input.query, 'query'), conversationId, limit) };
+    return { output: await searchChats(str(input.query, 'query'), conversationId, limit) };
   },
 };
 
@@ -1244,6 +1244,9 @@ export async function executeTool(call: ToolCall, ctx: Omit<ToolContext, 'callId
     return outcome;
   } catch (e) {
     return { output: e instanceof Error ? e.message : String(e), isError: true };
+  } finally {
+    // Any tool may have written files (scripts and the shell included), so what's known of them goes.
+    workspaceFilesChanged();
   }
 }
 

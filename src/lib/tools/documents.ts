@@ -1,4 +1,5 @@
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8 } from 'fflate';
+import { unzipBounded } from '../zip';
 
 /** Formats whose text can be pulled out of their zipped XML without a script. */
 export const ZIP_DOCUMENT_EXT = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx|odt|ods|odp|epub)$/i;
@@ -170,8 +171,9 @@ function epub(files: Record<string, Uint8Array>) {
 /** Extracts readable text from Office Open XML, OpenDocument and EPUB files. */
 export function extractZipDocument(name: string, bytes: Uint8Array) {
   const ext = name.toLowerCase().match(/\.([a-z]+)$/)?.[1] ?? '';
-  // Media inside the archive is never read, so skip inflating it.
-  const files = unzipSync(bytes, { filter: (f) => !/\.(png|jpe?g|gif|emf|wmf|bmp|tiff?|mp[34]|wav|bin|ttf|otf|woff2?)$/i.test(f.name) });
+  // Media inside the archive is never read, so skip inflating it. What is read is capped, so a
+  // small file that expands to gigabytes fails instead of exhausting memory.
+  const files = unzipBounded(bytes, { filter: (f) => !/\.(png|jpe?g|gif|emf|wmf|bmp|tiff?|mp[34]|wav|bin|ttf|otf|woff2?)$/i.test(f.name) });
   let text: string;
   if (/^do[ct]/.test(ext)) text = docx(files);
   else if (ext.startsWith('xl')) text = xlsx(files);

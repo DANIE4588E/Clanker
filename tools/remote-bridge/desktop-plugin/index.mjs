@@ -25,6 +25,26 @@ export async function publishConnection(config, origin, authenticatedUrl) {
   };
 }
 
+/**
+ * Harness's own launch-token URL for its loopback origin, found by what the host offers rather
+ * than by its version: Connection's `authenticatedUrl()` (0.2.1 and 0.2.2), else the token
+ * provider's contribution to the `webserver/entry-url` event (0.2.3 moved the token there).
+ */
+export function hostEntryUrl(ctx, origin) {
+  if (typeof ctx.connection?.authenticatedUrl === 'function') return ctx.connection.authenticatedUrl(origin);
+  const entries = [];
+  if (typeof ctx.emit === 'function') ctx.emit(ctx.webServer, 'webserver/entry-url', origin, entries);
+  const root = new URL(origin);
+  const entry = entries.find((candidate) => {
+    try {
+      const url = new URL(candidate?.url);
+      return url.origin === root.origin && url.searchParams.getAll('token').length === 1 && Boolean(url.searchParams.get('token'));
+    } catch { return false; }
+  });
+  if (!entry) throw new Error('Desktop did not provide a launch token for its own origin.');
+  return entry.url;
+}
+
 async function portBusy(port) {
   return new Promise((resolve) => {
     const socket = createConnection({ host: '127.0.0.1', port });
@@ -81,16 +101,19 @@ export async function apply(ctx) {
   let startup;
   let cancelReady;
   const cancelled = new Promise((resolve) => { cancelReady = resolve; });
-  ctx.on('dispose', async () => {
+  const stop = async () => {
     stopped = true; cancelReady(); await startup;
     await cleanupBridge?.(); await cleanupConnection?.();
-  });
+  };
+  // Cordis 4 releases a plugin's effects on unload and never emits 'dispose'.
+  if (typeof ctx.effect === 'function') ctx.effect(() => stop, 'clanker-desktop-bridge: bridge process');
+  else ctx.on('dispose', stop);
   // Await readiness asynchronously: waiting inside activation would wait on our own row.
   const ready = ctx.get('loader')?.await() ?? Promise.resolve();
   startup = Promise.race([ready, cancelled]).then(async () => {
     if (stopped) return;
     const origin = ctx.webServer.getOrigin();
-    cleanupConnection = await publishConnection(config, origin, ctx.connection.authenticatedUrl(origin));
+    cleanupConnection = await publishConnection(config, origin, hostEntryUrl(ctx, origin));
     if (stopped) return;
     cleanupBridge = await superviseBridge(config);
   }).catch(() => { console.error('[Clanker] Automatic bridge startup failed. Check the plugin configuration.'); });

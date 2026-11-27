@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,19 @@ test('antigravity bridge: capabilities, turns, effort as variant id, and convers
   const second = await f.json('sessions/chat1/runs', { submissionId: 'two', text: 'again', files: [] });
   const again = await f.done(second.id);
   assert.match(again.content.filter((p) => p.type === 'text').map((p) => p.text).join(''), /resumed=yes/);
+});
+
+test('antigravity bridge: cmd.exe metacharacters in a prompt reach agy as text, never as commands', { skip: windows ? false : 'agy.cmd shim is Windows-only' }, async (t) => {
+  const f = await bridgeFixture(t);
+  await f.json('sessions', { chatId: 'chat3', model: 'antigravity/gemini-4-neon', instructions: '' });
+  const prompt = 'say x" & echo injected> injected.txt & "y %PATH% ^& | (a) <b> !c! \\"d\\ ';
+  const { id } = await f.json('sessions/chat3/runs', { submissionId: 'meta', text: prompt, files: [] });
+  const finished = await f.done(id);
+  assert.equal(finished.state, 'completed');
+  const text = finished.content.filter((p) => p.type === 'text').map((p) => p.text).join('');
+  assert.ok(text.includes(`prompt=${JSON.stringify(prompt)}`), text);
+  await assert.rejects(access(path.join(f.root, 'workspaces', 'chat3', 'injected.txt')));
+  await assert.rejects(access(path.join(process.cwd(), 'injected.txt')));
 });
 
 test('antigravity bridge: failed turns, stop, and no controls', { skip: windows ? false : 'agy.cmd shim is Windows-only' }, async (t) => {

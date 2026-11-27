@@ -1,5 +1,5 @@
 import type Feather from '@expo/vector-icons/Feather';
-import { useChats, type Conversation } from '@/store/chats';
+import { messageCount, useChats, type Conversation } from '@/store/chats';
 import { useLibrary } from '@/store/library';
 import { useSkills } from '@/store/skills';
 import { availableCommands, goalCommand, planCommand, studyCommand } from './commands';
@@ -85,7 +85,7 @@ const baseName = (path: string) => path.split('/').pop() ?? path;
 function readableChats(fromId: string | null): Conversation[] {
   const pool = memoryPool(fromId);
   return Object.values(useChats.getState().conversations)
-    .filter((c) => c.id !== fromId && c.memory !== false && c.messages.length > 0 && memoryPool(c.id) === pool)
+    .filter((c) => c.id !== fromId && c.memory !== false && messageCount(c) > 0 && memoryPool(c.id) === pool)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 

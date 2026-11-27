@@ -1,3 +1,4 @@
+import { withSavedHeaders } from '../secrets';
 import { anthropic } from './anthropic';
 import { antigravity } from './antigravity';
 import { claudeSub } from './claudeSub';
@@ -16,11 +17,13 @@ import type { Endpoint, ProviderAdapter, ProviderType } from './types';
  * and retries once on the newly picked URL.
  */
 async function failover<T>(
-  endpoint: Endpoint,
+  given: Endpoint,
   signal: AbortSignal | undefined,
   run: (endpoint: Endpoint) => Promise<T>,
   started = () => false
 ): Promise<T> {
+  // Headers live in the keychain; an endpoint read just after launch may not have them yet.
+  const endpoint = await withSavedHeaders(given);
   if (baseUrls(endpoint).length < 2) return run(endpoint);
   const url = await resolveBaseUrl(endpoint, signal);
   try {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { WebSocketServer } from 'ws';
-import { publishConnection, superviseBridge } from '../desktop-plugin/index.mjs';
+import { publishConnection, superviseBridge, hostEntryUrl } from '../desktop-plugin/index.mjs';
 import { harnessEndpoint } from '../src/desktop-discovery.mjs';
 import { createBridge } from '../src/server.mjs';
 
@@ -120,4 +120,16 @@ test('Desktop owns only its child, hides its console, and does not inherit stale
     await busyStop();
     assert.equal(calls.length, 1);
   } finally { await stop?.(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('the Desktop launch URL comes from Connection on older hosts and from the token provider on newer ones', () => {
+  const origin = 'http://127.0.0.1:3080';
+  assert.equal(hostEntryUrl({ connection: { authenticatedUrl: (base) => `${base}/?token=${token}` } }, origin), `${origin}/?token=${token}`);
+  const webServer = {};
+  const ctx = { connection: {}, webServer, emit: (thisArg, event, base, entries) => {
+    assert.equal(thisArg, webServer); assert.equal(event, 'webserver/entry-url'); assert.equal(base, origin);
+    entries.push({ url: 'http://127.0.0.1:9/?token=elsewhere' }, { url: `${origin}/?token=${token}`, open: true });
+  } };
+  assert.equal(hostEntryUrl(ctx, origin), `${origin}/?token=${token}`);
+  assert.throws(() => hostEntryUrl({ connection: {}, webServer, emit() {} }, origin), /launch token/);
 });

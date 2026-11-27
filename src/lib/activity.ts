@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBackends } from '@/store/backends';
-import { messageText, useChats, type Conversation } from '@/store/chats';
+import { unloadedSummary, useChats, type Conversation } from '@/store/chats';
 import { useSettings } from '@/store/settings';
-import { CHARS_PER_TOKEN } from './context';
+import { usageBuckets, type UsageBucket } from './chatIndex';
 
 export const DAY = 24 * 60 * 60 * 1000;
 
@@ -32,60 +32,60 @@ export const addDays = (day: number, n: number) => {
   return d.setHours(0, 0, 0, 0);
 };
 
+/** A chat's usage by span and model: from the chat list for a chat not loaded, so none is read for it. */
+function bucketsOf(c: Conversation): UsageBucket[] {
+  const unloaded = unloadedSummary(c);
+  return unloaded ? (unloaded.u ?? []) : usageBuckets(c.messages);
+}
+
+// A chat's events, by its buckets (which stay the same object until its replies change).
+const eventCache = new WeakMap<UsageBucket[], { id: string; model: string; provider: string; events: UsageEvent[] }>();
+
+function chatEvents(c: Conversation, provider: string): UsageEvent[] {
+  const buckets = bucketsOf(c);
+  const hit = eventCache.get(buckets);
+  if (hit && hit.id === c.id && hit.model === c.model && hit.provider === provider) return hit.events;
+  const events = buckets.map(([at, model, input, output, cached, cacheable, requests]) => ({
+    at,
+    day: startOfDay(at),
+    conversationId: c.id,
+    model: model ?? c.model,
+    provider,
+    input,
+    output,
+    cached,
+    cacheable,
+    requests,
+  }));
+  eventCache.set(buckets, { id: c.id, model: c.model, provider, events });
+  return events;
+}
+
 /**
  * The usage of every assistant reply in the saved chats. Replies with per-response numbers
  * (see lib/stats) count them; the rest, such as remote replies, estimate their output from the
- * text they streamed.
+ * text they streamed. Each event sums a chat's replies with one model over a quarter of an hour
+ * (see lib/chatIndex), which adds up to the same days, models and totals as one per reply.
  */
 export function usageEvents(
   conversations: Record<string, Conversation>,
   providerOf: (c: Conversation) => string
 ): UsageEvent[] {
   const events: UsageEvent[] = [];
-  for (const c of Object.values(conversations)) {
-    const provider = providerOf(c);
-    for (const m of c.messages) {
-      if (m.role !== 'assistant') continue;
-      const steps = m.steps ?? [];
-      let input = 0;
-      let output = 0;
-      let cached = 0;
-      let cacheable = 0;
-      for (const s of steps) {
-        output += s.tokens;
-        input += s.input ?? 0;
-        if (s.input && s.cached != null) {
-          cached += s.cached;
-          cacheable += s.input;
-        }
-      }
-      if (!steps.length) output = Math.ceil(messageText(m).length / CHARS_PER_TOKEN);
-      if (!input && !output) continue;
-      events.push({
-        at: m.createdAt,
-        day: startOfDay(m.createdAt),
-        conversationId: c.id,
-        model: m.model ?? c.model,
-        provider,
-        input,
-        output,
-        cached,
-        cacheable,
-        requests: Math.max(steps.length, 1),
-      });
-    }
-  }
+  for (const c of Object.values(conversations)) events.push(...chatEvents(c, providerOf(c)));
   return events.sort((a, b) => a.at - b.at);
 }
 
 /**
  * Usage events of every chat, kept current as replies finish (when their last numbers come in)
- * without recounting on every streamed token.
+ * without recounting on every streamed token, nor reading chats that aren't loaded.
  */
 export function useUsageEvents(): UsageEvent[] {
   const signature = useChats(
     useShallow((s) =>
-      Object.values(s.conversations).flatMap((c) => {
+      Object.values(s.conversations).flatMap((c): unknown[] => {
+        const unloaded = unloadedSummary(c);
+        if (unloaded) return [c.id, unloaded];
         const last = c.messages[c.messages.length - 1];
         return [c.id, c.messages.length, last?.status, last?.steps?.length ?? 0];
       })

@@ -1,13 +1,17 @@
 import { Directory, File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
-import type { Conversation } from '@/store/chats';
+import { unloadedSummary, type Conversation } from '@/store/chats';
 import { useLibrary } from '@/store/library';
 import { attachmentUri, duplicateAttachment, importFile } from './attachments';
-import { chatUploads, shareFile, uploadFile, type Upload } from './chatExport';
+import { shareFile, uploadFile, type Upload } from './chatExport';
+import { libraryRefs, type FileRef, type UploadRef } from './chatIndex';
 import { workspaceKeyOf } from './projects';
-import type { AttachmentPart, ContentPart } from './providers';
+import type { AttachmentPart } from './providers';
 import { Workspace } from './workspace';
+
+// Kept in lib/chatIndex, which the chat list's summaries use too.
+export { deliverablesOf, looksScratch, presentedIn, touchedIn } from './chatIndex';
 
 export type LibraryKind = 'image' | 'pdf' | 'document' | 'sheet' | 'slides' | 'site' | 'code' | 'text' | 'media' | 'archive' | 'other';
 
@@ -65,29 +69,6 @@ export const KIND_LABEL: Record<LibraryKind, string> = {
   other: 'File',
 };
 
-/** Files a reply handed over with present_files, or null when it handed over none. */
-export function presentedIn(content: ContentPart[]): string[] | null {
-  const calls = content.filter((p) => p.type === 'tool' && p.name === 'present_files' && p.status === 'done');
-  if (!calls.length) return null;
-  return [...new Set(calls.flatMap((p) => (p.type === 'tool' ? (p.files ?? []) : [])))];
-}
-
-/** Every workspace file a reply's tool calls created or changed, in the order first touched. */
-export function touchedIn(content: ContentPart[]): string[] {
-  return [...new Set(content.flatMap((p) => (p.type === 'tool' ? (p.files ?? []) : [])))];
-}
-
-// For replies that didn't say which files were for the user: what agents make for themselves.
-const SCRATCH_DIR = /(^|\/)(\.[^/]*|__pycache__|node_modules|tmp|temp|scratch|cache|venv|\.venv)\//i;
-const SCRATCH_NAME =
-  /^(test|tests|check|verify|validate|debug|scratch|tmp|temp|probe|inspect|try|sanity|lint)([-_. \d]|$)|[-_.](test|spec|check|debug|tmp)\.[^./]+$|\.(pyc|log|map|tmp|bak|lock|orig)$/i;
-
-/** Whether a path looks like a helper an agent wrote for its own use: a check, a test, a temp file. */
-export const looksScratch = (path: string) => SCRATCH_DIR.test(path) || SCRATCH_NAME.test(path.split('/').pop() ?? path);
-
-/** The files a reply made for the user (see presentedIn), for the Library. */
-export const deliverablesOf = (content: ContentPart[]) => presentedIn(content) ?? touchedIn(content).filter((p) => !looksScratch(p));
-
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** Photos are stored under random names; they get a camera-style one instead. */
@@ -103,54 +84,111 @@ function photoName(at: number) {
  */
 export function libraryItems(conversations: Record<string, Conversation>): LibraryItem[] {
   const items = new Map<string, LibraryItem>();
+  // Uploads with inlined text, for the check below; a chat-list part has its text in the chat file.
+  const inlined = new Set<LibraryItem>();
   for (const c of Object.values(conversations)) {
     const from = { chatId: c.id, chatTitle: c.title, projectId: c.projectId };
-    for (const u of chatUploads(c)) {
-      const key = `u:${c.id}:${u.key}`;
-      const image = u.part.type === 'image';
-      const name = image ? photoName(u.at) : u.name;
-      const size = u.part.type === 'file' ? (u.part.size ?? u.part.text?.length) : undefined;
-      items.set(key, { key, name, kind: image ? 'image' : kindOf(name), source: 'upload', ...from, at: u.at, size, upload: u });
+    const { uploads, files, listed } = refsOf(c);
+    for (const u of uploads) {
+      const part = listed ? listedPart(c, u) : u.part;
+      const key = `u:${c.id}:${u.k}`;
+      const image = part.type === 'image';
+      const upload: Upload = { key: u.k, part, name: uploadName(part), messageId: u.m, at: u.at };
+      const name = image ? photoName(u.at) : upload.name;
+      const size = part.type === 'file' ? (listed ? u.z : (part.size ?? part.text?.length)) : undefined;
+      const item: LibraryItem = { key, name, kind: image ? 'image' : kindOf(name), source: 'upload', ...from, at: u.at, size, upload };
+      items.set(key, item);
+      if (part.type === 'file' && (listed ? !!u.t : part.text != null)) inlined.add(item);
     }
     if (c.backendId && c.backendId !== 'local') continue;
     const workspace = workspaceKeyOf(c);
-    for (const m of c.messages) {
-      if (m.role !== 'assistant' || m.status === 'streaming') continue;
-      for (const path of deliverablesOf(m.content)) {
-        const key = `f:${workspace}:${path}`;
-        const prev = items.get(key);
-        if (prev && prev.at > m.createdAt) continue;
-        const name = path.split('/').pop() ?? path;
-        items.set(key, { key, name, kind: kindOf(name), source: 'agent', ...from, at: m.createdAt, workspace, path });
-      }
+    for (const [path, at] of files) {
+      const key = `f:${workspace}:${path}`;
+      const prev = items.get(key);
+      if (prev && prev.at > at) continue;
+      const name = path.split('/').pop() ?? path;
+      items.set(key, { key, name, kind: kindOf(name), source: 'agent', ...from, at, workspace, path });
     }
   }
 
   const out: LibraryItem[] = [];
   const workspaces = new Map<string, Workspace>();
+  const now = Date.now();
   for (const item of items.values()) {
     if (item.source === 'agent') {
-      try {
-        let ws = workspaces.get(item.workspace!);
-        if (!ws) workspaces.set(item.workspace!, (ws = new Workspace(item.workspace!)));
-        const file = ws.fileAt(item.path!);
-        // Deleted or moved away since.
-        if (!file.exists) continue;
-        item.size = file.size;
-        item.at = file.modificationTime || item.at;
-      } catch {
-        continue;
+      const ref = `${item.workspace}:${item.path}`;
+      let stat = statCache.get(ref);
+      if (!stat || now - stat.checked > STAT_TTL) {
+        stat = { checked: now, exists: false };
+        try {
+          let ws = workspaces.get(item.workspace!);
+          if (!ws) workspaces.set(item.workspace!, (ws = new Workspace(item.workspace!)));
+          const file = ws.fileAt(item.path!);
+          if (file.exists) stat = { checked: now, exists: true, size: file.size, modified: file.modificationTime };
+        } catch {
+          // Unreadable: left out, as if gone.
+        }
+        statCache.set(ref, stat);
       }
+      // Deleted or moved away since.
+      if (!stat.exists) continue;
+      item.size = stat.size;
+      item.at = stat.modified || item.at;
     } else {
       // Uploads whose stored copy is gone can still be opened when their text was inlined.
       const part = item.upload!.part;
-      const stored = !!part.file && new File(attachmentUri(part.file)).exists;
-      if (!stored && !(part.type === 'file' && part.text != null)) continue;
+      let stored = false;
+      if (part.file) {
+        const ref = `upload:${part.file}`;
+        let stat = statCache.get(ref);
+        if (!stat || now - stat.checked > STAT_TTL) statCache.set(ref, (stat = { checked: now, exists: new File(attachmentUri(part.file)).exists }));
+        stored = stat.exists;
+      }
+      if (!stored && !inlined.has(item)) continue;
     }
     out.push(item);
   }
   return out.sort((a, b) => b.at - a.at);
 }
+
+/**
+ * Whether files are there, by workspace path or stored upload, as checked last: "@" lists the
+ * Library on every mention typed, and it doesn't change in a moment.
+ */
+const statCache = new Map<string, { checked: number; exists: boolean; size?: number; modified?: number | null }>();
+const STAT_TTL = 2000;
+
+/** Checks every file afresh the next time the Library is listed (after deleting some, say). */
+export function forgetLibraryStats() {
+  statCache.clear();
+}
+
+/** What a chat adds to the Library: from the chat list for a chat not loaded, so its file isn't read. */
+function refsOf(c: Conversation): { uploads: UploadRef[]; files: FileRef[]; listed: boolean } {
+  const unloaded = unloadedSummary(c);
+  if (unloaded) return { uploads: unloaded.up ?? [], files: unloaded.f ?? [], listed: true };
+  return { ...libraryRefs(c.messages), listed: false };
+}
+
+/** An upload's part from the chat list, whose inlined text is read from the chat when it's used. */
+function listedPart(c: Conversation, u: UploadRef): AttachmentPart {
+  if (!u.t) return u.part;
+  const part = { ...u.part };
+  const index = Number(u.k.slice(u.k.lastIndexOf(':') + 1));
+  Object.defineProperty(part, 'text', {
+    enumerable: true,
+    configurable: true,
+    get: () => {
+      const full = c.messages.find((m) => m.id === u.m)?.content[index];
+      return full?.type === 'file' ? full.text : undefined;
+    },
+  });
+  return part;
+}
+
+/** The name an upload goes by (as lib/chatExport names attachments). */
+const uploadName = (part: AttachmentPart) =>
+  part.type === 'image' ? `image${part.file.match(/\.[^./]+$/)?.[0] ?? '.jpg'}` : part.name;
 
 /**
  * An agent's workspace file by Library key, whether or not the Library lists it (a page a reply
@@ -291,5 +329,6 @@ export function purgeItems(items: LibraryItem[]) {
       // Already gone.
     }
   }
+  forgetLibraryStats();
   useLibrary.getState().purge(items.map((i) => i.key));
 }

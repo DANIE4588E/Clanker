@@ -4,7 +4,7 @@ import { useMemory } from '@/store/memory';
 import { resolveBudget, useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
 import { useBackends } from '@/store/backends';
-import { historyOf, tokensOf, unitsOf, visibleTokens } from './context';
+import { historyUnits, tokensOf, visibleTokens } from './context';
 import { availableTools } from './tools';
 import { systemPrompt } from './tools/prompt';
 
@@ -80,7 +80,7 @@ export function useContextUsage(conversationId: string | null, enabled: boolean)
 
   const messages = useMemo(() => {
     if (!enabled || remote || !conversation) return 0;
-    return visibleTokens(unitsOf(historyOf(conversation, replyId)), conversation.compressions ?? []);
+    return visibleTokens(historyUnits(conversation, replyId), conversation.compressions ?? []);
   }, [enabled, remote, conversation, replyId]);
 
   if (remote) {

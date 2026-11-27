@@ -1,42 +1,26 @@
 import Feather from '@expo/vector-icons/Feather';
-import { memo, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { WebView } from 'react-native-webview';
 import { useTheme } from '@/lib/theme';
 import { CodeBlock } from '../CodeBlock';
+import { MERMAID_SCRIPT, mermaidFailures, PAGE_ERROR, pageHead, svgPage, useMermaid } from './mermaid';
 
-// Mermaid draws in a web view; it loads from the CDN the first time and is cached after that.
-const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js';
-const MAX_HEIGHT = 520;
-const MIN_HEIGHT = 80;
-
-/** The page that draws `source`: inline it fits the card and reports its height; full screen it can be zoomed. */
-function page(source: string, dark: boolean, zoom: boolean) {
+/** The page that draws `source` full screen, where it can be zoomed. */
+function page(source: string, dark: boolean) {
   // As a JSON string, with "<" escaped so the diagram can't close the script.
   const src = JSON.stringify(source).replace(/</g, '\\u003c');
-  const fg = dark ? '#ECECEC' : '#0D0D0D';
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1${zoom ? ',maximum-scale=6,user-scalable=yes' : ',user-scalable=no'}">
-<style>
-html,body{margin:0;padding:0;background:transparent;color:${fg};font-family:-apple-system,Roboto,sans-serif}
-#d{display:flex;justify-content:center;align-items:flex-start;padding:${zoom ? '24px 12px' : '4px 0'}}
-#d svg{max-width:100%!important;height:auto;${zoom ? '' : `max-height:${MAX_HEIGHT - 8}px;`}}
-</style></head><body><div id="d"></div>
-<script src="${MERMAID}"></script>
+  return `${pageHead(dark, true)}<body><div id="d"></div>
+${MERMAID_SCRIPT}
 <script>
 (async function(){
-  var post=function(m){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify(m))};
   try{
     if(typeof mermaid==='undefined') throw new Error('Mermaid could not load. Check your connection.');
     mermaid.initialize({startOnLoad:false,theme:${dark ? "'dark'" : "'default'"},securityLevel:'strict',fontFamily:'-apple-system,Roboto,sans-serif'});
     var out=await mermaid.render('m'+Date.now(),${src});
-    var d=document.getElementById('d');
-    d.innerHTML=out.svg;
-    post({ok:true,height:Math.ceil(d.getBoundingClientRect().height)});
-  }catch(e){
-    post({ok:false,error:String(e&&e.message||e)});
-  }
+    document.getElementById('d').innerHTML=out.svg;
+  }catch(e){}
 })();
 </script></body></html>`;
 }
@@ -47,7 +31,7 @@ const heights = new Map<string, number>();
 function FullScreen({ source, dark, onClose }: { source: string; dark: boolean; onClose: () => void }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const html = useMemo(() => page(source, dark, true), [source, dark]);
+  const html = useMemo(() => page(source, dark), [source, dark]);
   return (
     <Modal visible animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <View style={[styles.full, { backgroundColor: colors.background, paddingTop: insets.top }]}>
@@ -74,22 +58,28 @@ function DiagramInner({ source }: { source: string }) {
   const { colors, scheme } = useTheme();
   const dark = scheme === 'dark';
   const key = `${dark ? 'd' : 'l'}:${source}`;
-  const [height, setHeight] = useState<number | null>(heights.get(key) ?? null);
-  const [error, setError] = useState<string | null>(null);
+  // The card's inner width, which the diagram is drawn and measured for (see ./mermaid).
+  const [width, setWidth] = useState(0);
+  // Failures to load Mermaid from before this card showed are tried again.
+  const [since] = useState(mermaidFailures);
+  const [pageError, setPageError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const html = useMemo(() => page(source, dark, false), [source, dark]);
+  const result = useMermaid(source, dark, width, since);
+  const drawn = result && 'svg' in result ? result : null;
+  useEffect(() => {
+    if (!drawn) return;
+    heights.set(key, drawn.height);
+    heights.set(source, drawn.height);
+  }, [drawn, key, source]);
+  // Until it's drawn: as tall as when last seen, or in the other theme (switching keeps the card's size).
+  const height = drawn?.height ?? heights.get(key) ?? heights.get(source) ?? null;
+  const error = pageError ?? (result && 'error' in result ? result.error : null);
+  // The drawn SVG, shown without scripts.
+  const html = useMemo(() => (drawn ? svgPage(drawn.svg, dark) : null), [drawn, dark]);
 
-  const onMessage = (e: WebViewMessageEvent) => {
-    try {
-      const m = JSON.parse(e.nativeEvent.data);
-      if (m.ok) {
-        const h = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Number(m.height) || MIN_HEIGHT));
-        heights.set(key, h);
-        setHeight(h);
-      } else setError(String(m.error || 'The diagram could not be drawn.'));
-    } catch {
-      // Not a message from the page.
-    }
+  const onLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) setWidth(w);
   };
 
   if (error) {
@@ -105,16 +95,17 @@ function DiagramInner({ source }: { source: string }) {
 
   return (
     <View style={[styles.card, { borderColor: colors.border, backgroundColor: dark ? '#121212' : colors.background }]}>
-      <View style={{ height: height ?? 200 }} pointerEvents="none">
-        <WebView
-          source={{ html }}
-          originWhitelist={['*']}
-          javaScriptEnabled
-          scrollEnabled={false}
-          onMessage={onMessage}
-          onError={() => setError('The page failed to load.')}
-          style={styles.web}
-        />
+      <View style={{ height: height ?? 200 }} pointerEvents="none" onLayout={onLayout}>
+        {html != null && (
+          <WebView
+            source={{ html }}
+            originWhitelist={['*']}
+            javaScriptEnabled={false}
+            scrollEnabled={false}
+            onError={() => setPageError(PAGE_ERROR)}
+            style={styles.web}
+          />
+        )}
         {height == null && (
           <View style={[StyleSheet.absoluteFill, styles.center]}>
             <ActivityIndicator color={colors.textTertiary} />

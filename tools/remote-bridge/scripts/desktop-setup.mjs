@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HarnessAdapter } from '../src/harness.mjs';
+import { restrictToOwner } from '../src/persistence.mjs';
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -45,10 +46,20 @@ function readAsar(archive, filename) {
   } finally { closeSync(fd); }
 }
 
+/** 0.2.1-rc.5 and every later 0.2 release or prerelease: the range desktop-plugin's engines.dsh gives Harness. */
+function supportedDesktop(version) {
+  const match = /^0\.2\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(version ?? '');
+  if (!match) return false;
+  const patch = Number(match[1]);
+  if (patch !== 1) return patch > 1;
+  const candidate = match[2] && /^rc\.(\d+)$/.exec(match[2]);
+  return !match[2] || Boolean(candidate && Number(candidate[1]) >= 5);
+}
+
 const desktopDir = path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DeepSeek Harness');
 const archive = path.join(desktopDir, 'resources', 'app.asar');
 const desktopVersion = JSON.parse(readAsar(archive, 'package.json')).version;
-if (desktopVersion !== '0.2.1-rc.5') throw new Error(`Unsupported Desktop ${desktopVersion}; this plugin supports 0.2.1-rc.5. No version exemptions are used.`);
+if (!supportedDesktop(desktopVersion)) throw new Error(`Unsupported Desktop ${desktopVersion}; this plugin supports 0.2.1-rc.5 through the 0.2 releases. No version exemptions are used.`);
 const adapter = new HarnessAdapter({ ...config, launchToken: credentials.HARNESS_LAUNCH_TOKEN });
 let changed = false, installed = false;
 try {
@@ -67,6 +78,8 @@ try {
   };
   const backup = path.join(stateDir, 'desktop-setup-backup.json');
   try { await access(backup); } catch { await writeFile(backup, JSON.stringify({ config: JSON.parse(original), env: savedEnv }, null, 2), { mode: 0o600 }); }
+  // Both hold the bridge token (and the backup the Harness launch token); 0600 means nothing on Windows.
+  await restrictToOwner(backup); await restrictToOwner(envPath);
   await writeFile(path.join(root, 'desktop-plugin', 'local.config.json'), JSON.stringify(localConfig, null, 2));
   if (!process.env.npm_execpath) throw new Error('Run this installer through npm run desktop:install.');
   const packed = await execute(process.execPath, [process.env.npm_execpath, 'pack', '--json', '--ignore-scripts', '--pack-destination', stateDir], { cwd: path.join(root, 'desktop-plugin'), windowsHide: true, maxBuffer: 1024 * 1024 });

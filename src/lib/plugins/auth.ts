@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import * as WebBrowser from 'expo-web-browser';
 import { fetch } from '@/lib/net';
-import { usePlugins, type PluginAccount } from '@/store/plugins';
+import { pluginSecretsReady, usePlugins, type PluginAccount } from '@/store/plugins';
 import { runExclusiveRefresh, subscriptionAuth, type SubscriptionCredentials } from '../subscriptions/credentials';
 import { generatePkce, type PkcePair } from '../subscriptions/pkce';
 import { pluginGranted, PLUGINS, type PluginDef } from './catalog';
@@ -173,7 +173,10 @@ export function parseOAuthCallback(url: string, session: OAuthSession): string {
   return readRedirect(url, session.pkce.state);
 }
 
-/** The authorization code from a sign-in redirect, checked against the state sent. */
+/**
+ * The authorization code from a sign-in redirect, checked against the state sent. A redirect
+ * without the state is refused too: every sign-in sends one, and servers must return it (RFC 6749 §4.1.2).
+ */
 export function readRedirect(url: string, expectedState: string): string {
   // Custom-scheme URLs parse unreliably across engines; only the query matters.
   const query = new URLSearchParams(url.split('#')[0].split('?')[1] ?? '');
@@ -184,12 +187,13 @@ export function readRedirect(url: string, expectedState: string): string {
   }
   const code = query.get('code');
   if (!code) throw new Error('The sign-in sent no authorization code.');
-  const state = query.get('state');
-  if (state && state !== expectedState) throw new Error('Sign-in state mismatch. Try again.');
+  if (!expectedState || query.get('state') !== expectedState) throw new Error('Sign-in state mismatch. Try again.');
   return code;
 }
 
 export async function completeOAuth(session: OAuthSession, code: string) {
+  // The client secret, if any, is read from the keychain on launch.
+  await pluginSecretsReady();
   const auth = PROVIDERS[session.provider].auth as OAuthConfig;
   const client = providerClient(session.provider)!;
   const data = await tokenRequest(auth.tokenUrl, {
@@ -287,6 +291,7 @@ export async function connectWithToken(provider: ProviderId, token: string) {
 
 /** Revokes the provider's tokens where it can (best effort), forgets them, and removes its plugins. */
 export async function disconnectProvider(provider: ProviderId) {
+  await pluginSecretsReady();
   const creds = await subscriptionAuth.get(slot(provider)).catch(() => null);
   const auth = PROVIDERS[provider].auth;
   if (creds && auth.kind === 'oauth' && auth.revokeUrl) {
@@ -298,8 +303,9 @@ export async function disconnectProvider(provider: ProviderId) {
     }).catch(() => {});
   }
   // MCP servers revoke through their authorization server's endpoint (RFC 7009), when it has one.
+  // The endpoint came from the server, so the token and client secret only go to it over https.
   const mcp = usePlugins.getState().mcp[provider]?.oauth;
-  if (creds && mcp?.revocationEndpoint) {
+  if (creds && mcp?.revocationEndpoint && isHttps(mcp.revocationEndpoint)) {
     await fetch(mcp.revocationEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -313,13 +319,33 @@ export async function disconnectProvider(provider: ProviderId) {
   state.setAccount(provider, null);
 }
 
+const isHttps = (url: string) => {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 // ---- Requests -------------------------------------------------------------------------------
 
 const reconnect = (provider: ProviderId) =>
   `${PROVIDERS[provider].title} access has expired or was removed. Ask the user to reconnect it under Plugins in the sidebar.`;
 
-async function refreshed(provider: ProviderId, creds: SubscriptionCredentials) {
+/** Whether the saved access token can still be used for a minute or more. */
+export const tokenFresh = (creds: SubscriptionCredentials) => !!creds.accessToken && (!creds.expiresAt || creds.expiresAt - 60_000 > Date.now());
+
+/**
+ * Refreshes the provider's tokens, one refresh at a time. The tokens are read again inside the
+ * lock: another request may have just refreshed them, and providers that rotate refresh tokens
+ * refuse the old one. `rejected` is the access token a server just refused, if any.
+ */
+async function refreshed(provider: ProviderId, rejected?: string) {
   return runExclusiveRefresh(slot(provider), async () => {
+    const creds = await subscriptionAuth.get(slot(provider));
+    if (!creds) throw new Error(`${PROVIDERS[provider].title} isn’t connected. Ask the user to connect it under Plugins in the sidebar.`);
+    if (tokenFresh(creds) && creds.accessToken !== rejected) return creds;
+    await pluginSecretsReady();
     const auth = PROVIDERS[provider].auth;
     if (auth.kind !== 'oauth' || !creds.refreshToken) {
       usePlugins.getState().patchAccount(provider, { needsReconnect: true });
@@ -349,15 +375,17 @@ async function refreshed(provider: ProviderId, creds: SubscriptionCredentials) {
   });
 }
 
-/** A current access token, refreshed when it is about to expire (or `force`d after a 401). */
-async function accessToken(provider: ProviderId, force = false) {
+/**
+ * A current access token, refreshed when it is about to expire, or when a server just refused
+ * `rejected` (after a 401).
+ */
+async function accessToken(provider: ProviderId, rejected?: string) {
   const creds = await subscriptionAuth.get(slot(provider));
   if (!creds || !usePlugins.getState().accounts[provider]) {
     throw new Error(`${PROVIDERS[provider].title} isn’t connected. Ask the user to connect it under Plugins in the sidebar.`);
   }
-  const fresh = !creds.expiresAt || creds.expiresAt - 60_000 > Date.now();
-  if (!force && creds.accessToken && fresh) return creds.accessToken;
-  return (await refreshed(provider, creds)).accessToken;
+  if (tokenFresh(creds) && creds.accessToken !== rejected) return creds.accessToken;
+  return (await refreshed(provider, rejected)).accessToken;
 }
 
 export class PluginApiError extends Error {
@@ -447,8 +475,9 @@ export async function pluginFetch(provider: ProviderId, url: string, init: Plugi
     if (!res.ok) throw await apiError(provider, res);
     return res;
   }
-  let res = await send(await accessToken(provider));
-  if (res.status === 401 && def.auth.kind === 'oauth') res = await send(await accessToken(provider, true));
+  const token = await accessToken(provider);
+  let res = await send(token);
+  if (res.status === 401 && def.auth.kind === 'oauth') res = await send(await accessToken(provider, token));
   if (!res.ok) throw await apiError(provider, res);
   return res;
 }

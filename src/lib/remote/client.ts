@@ -4,6 +4,7 @@ import { attachmentUri } from '@/lib/attachments';
 import { apiKeys, uid } from '@/lib/storage';
 import { cachedRemoteFile } from './cache';
 import { forgetBridgeAddress, resolveBridgeAddress } from './addresses';
+import { bodyHash, bridgeTime, clockOffset, setClockOffset, signRequest } from './signing';
 import { MAX_REMOTE_FILE_BYTES, type BridgeInfo, type RemoteBackend, type RemoteFile, type RemoteSnapshot } from './types';
 
 export class RemoteAdapter {
@@ -13,13 +14,25 @@ export class RemoteAdapter {
     const token = this.token ?? await apiKeys.get(`bridge_${this.backend.id}`);
     if (!token) throw new Error('Set the bridge token in Settings → Providers.');
     const selected = await resolveBridgeAddress(this.backend, token, fetch);
-    const send = async (url: string) => {
+    // Signed, never sent: see ./signing. The body hash is the same for every attempt.
+    const hash = bodyHash(init.body);
+    const attempt = async (url: string, offset: number) => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), init.body instanceof File ? 120000 : 10000);
+      const signed = signRequest({ token, method: init.method ?? 'GET', path: `/v1/${path}`, bridgeId: this.backend.bridgeId ?? '', bodyHash: hash, timestamp: Date.now() + offset });
       try {
-        return await fetch(`${url}/v1/${path}`, { ...init, signal: controller.signal,
-          headers: { Authorization: `Bearer ${token}`, 'X-Clanker-Bridge': this.backend.bridgeId, ...init.headers } });
+        return await fetch(`${url}/v1/${path}`, { ...init, signal: controller.signal, headers: { ...init.headers, ...signed.headers } });
       } finally { clearTimeout(timeout); }
+    };
+    const send = async (url: string) => {
+      const response = await attempt(url, clockOffset(this.backend.id));
+      // The bridge accepted the signature but not this phone's clock: retry once on the bridge's time.
+      const serverTime = bridgeTime(response);
+      if (serverTime === undefined) return response;
+      const offset = serverTime - Date.now();
+      const retried = await attempt(url, offset);
+      if (retried.ok) setClockOffset(this.backend.id, offset);
+      return retried;
     };
     let response;
     try { response = await send(selected.url); }

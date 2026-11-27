@@ -1,39 +1,94 @@
 import { addText, sse, terminal, toolEvent } from './protocol.mjs';
 
-// Hermes's vocabulary; known providers can clamp it further on their wire API.
-const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+// Hermes's effort ladder, in its order. Levels a later Hermes adds to its catalogue are kept after
+// these. "ultra" is offered only where the catalogue advertises it.
+const KNOWN_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const DEFAULT_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+function orderEfforts(names) {
+  const valid = [...new Set(names.filter((name) => typeof name === 'string' && EFFORT_NAME.test(name)))];
+  return [...KNOWN_EFFORTS.filter((name) => valid.includes(name)), ...valid.filter((name) => !KNOWN_EFFORTS.includes(name))];
+}
+// Event names across Hermes releases. Any other event (subagent.*, message.interim,
+// replay.truncated, or one a newer Hermes adds) only refreshes metrics, so it can't break a run.
+const TEXT_EVENTS = new Set(['message.delta', 'assistant.delta']);
+const REASONING_EVENTS = new Set(['reasoning.delta', 'reasoning_delta', 'reasoning.available', 'thinking.delta']);
+const CONTROL_EVENTS = { 'approval.request': 'approval', 'clarification.request': 'clarification', 'clarify.request': 'clarification' };
+const SETTLED_EVENTS = new Set(['approval.settled', 'approval.responded', 'clarify.settled', 'clarify.responded', 'clarification.settled', 'clarification.responded']);
+// The phone offers one-off decisions only, never Hermes's session-wide or permanent allowances.
+const PHONE_APPROVALS = ['once', 'deny'];
+
 const finite = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+const object = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : undefined);
 function applyMetrics(run, data) {
-  const raw = data.clanker_metrics;
-  const usage = data.usage;
+  // Three shapes carry the same measurements: the compatibility patch's `clanker_metrics`, and
+  // Hermes's own status-bar projections (its `usage_stats` counters, or the TUI `usage` view),
+  // should a Hermes release put them on Runs. Cumulative prompt tokens never stand in for context.
+  const usage = object(data.usage);
+  const views = [object(data.clanker_metrics), object(data.metrics), object(data.session_usage), object(usage?.usage), usage].filter(Boolean);
   const metrics = { ...run.metrics };
-  if (raw && typeof raw === 'object') {
-    if (finite(raw.context_used) && finite(raw.context_max) && raw.context_max > 0) {
-      metrics.context = { used: raw.context_used, budget: raw.context_max, estimated: raw.context_estimated !== false };
+  let context, speed, cache;
+  for (const view of views) {
+    const used = view.context_used ?? view.context_tokens, budget = view.context_max ?? view.context_length;
+    if (!context && finite(used) && used > 0 && finite(budget) && budget > 0) {
+      const estimated = typeof view.context_estimated === 'boolean' ? view.context_estimated : view.context_source !== 'provider_usage';
+      context = { used: Math.min(used, budget), budget, estimated };
     }
-    if (finite(raw.tokens_per_s)) metrics.tokensPerSec = raw.tokens_per_s;
-    if (finite(raw.cache_hit_pct)) metrics.cacheHit = Math.min(1, raw.cache_hit_pct / 100);
+    speed ??= [view.tokens_per_s, view.avg_tps].find(finite);
+    if (cache === undefined && finite(view.cache_hit_pct)) cache = Math.min(1, view.cache_hit_pct / 100);
+    // A prompt total includes cache reads; so does Runs' `input_tokens` (the session prompt count).
+    const prompt = view.prompt_tokens ?? (view === usage ? usage.input_tokens : undefined);
+    const cached = view.cache_read_tokens ?? view.prompt_tokens_details?.cached_tokens;
+    if (cache === undefined && finite(prompt) && prompt > 0 && finite(cached)) cache = Math.min(1, cached / prompt);
   }
-  if (usage && typeof usage === 'object') {
-    const input = usage.input_tokens ?? usage.prompt_tokens;
-    const cached = usage.cache_read_tokens ?? usage.prompt_tokens_details?.cached_tokens;
-    if (finite(input) && input > 0 && finite(cached) && raw?.cache_hit_pct == null) metrics.cacheHit = Math.min(1, cached / input);
-    if (finite(usage.output_tokens) && finite(usage.decode_ms) && usage.decode_ms >= 100 && raw?.tokens_per_s == null) metrics.tokensPerSec = usage.output_tokens / usage.decode_ms * 1000;
-  }
+  if (usage && speed === undefined && finite(usage.output_tokens) && finite(usage.decode_ms) && usage.decode_ms >= 100) speed = usage.output_tokens / usage.decode_ms * 1000;
+  if (context) metrics.context = context;
+  if (speed !== undefined) metrics.tokensPerSec = speed;
+  if (cache !== undefined) metrics.cacheHit = cache;
   if (Object.keys(metrics).length) run.metrics = metrics;
 }
 
+/** A pending approval or question, from a stream event or a polled `pending_controls` entry. */
+function control(data, kind) {
+  const id = data.request_id ?? data.prompt_id;
+  if (typeof id !== 'string' && typeof id !== 'number') return undefined;
+  const text = (value) => (typeof value === 'string' ? value.trim() : '');
+  let prompt, choices;
+  if (kind === 'approval') {
+    const description = text(data.prompt) || text(data.description);
+    const command = text(data.command);
+    prompt = [description, command !== description ? command : ''].filter(Boolean).join('\n\n');
+    const offered = Array.isArray(data.choices) ? PHONE_APPROVALS.filter((choice) => data.choices.includes(choice)) : [];
+    choices = offered.length > 1 ? offered : PHONE_APPROVALS;
+  } else {
+    prompt = text(data.question) || text(data.prompt) || text(data.description);
+    const offered = Array.isArray(data.choices) ? data.choices.filter((choice) => typeof choice === 'string' && choice.trim() && choice.length <= 500).slice(0, 20) : [];
+    if (offered.length) choices = offered;
+  }
+  return { id, kind, prompt: prompt || JSON.stringify(data), choices, generation: data.execution_generation };
+}
+const controlKind = (value) => (String(value ?? '').includes('clar') ? 'clarification' : 'approval');
+
 export function applyHermesEvent(run, event, data) {
+  if (!object(data)) data = {};
   applyMetrics(run, data);
-  if (['message.delta', 'assistant.delta'].includes(event)) addText(run, data.text ?? data.delta ?? data.content ?? '');
-  if (['reasoning.delta', 'reasoning_delta', 'reasoning.available'].includes(event)) addText(run, data.text ?? data.delta ?? '', 'thought');
+  if (TEXT_EVENTS.has(event)) addText(run, data.text ?? data.delta ?? data.content ?? '');
+  if (REASONING_EVENTS.has(event)) addText(run, data.text ?? data.delta ?? '', 'thought');
   if (event === 'tool.started') toolEvent(run, data);
   if (['tool.completed', 'tool.failed'].includes(event)) toolEvent(run, { ...data, error: data.error || event === 'tool.failed' }, true);
-  if (['approval.request', 'clarification.request', 'clarify.request'].includes(event)) {
-    const id = data.request_id ?? data.prompt_id;
-    if (id && !run.controls.some((c) => c.id === id)) {
-      run.controls.push({ id, kind: event === 'approval.request' ? 'approval' : 'clarification', prompt: data.prompt ?? data.description ?? data.question ?? JSON.stringify(data), choices: event === 'approval.request' ? ['once', 'deny'] : undefined, generation: data.execution_generation });
+  if (Object.hasOwn(CONTROL_EVENTS, event)) {
+    const pending = control(data, CONTROL_EVENTS[event]);
+    if (pending && !run.controls.some((c) => c.id === pending.id)) {
+      run.controls.push(pending);
       run.state = 'waiting';
+    }
+  }
+  if (SETTLED_EVENTS.has(event)) {
+    // Answered elsewhere (Hermes Desktop, another client) or timed out: stop offering it.
+    const id = data.request_id ?? data.prompt_id;
+    if (id !== undefined && run.controls.some((c) => c.id === id)) {
+      run.controls = run.controls.filter((c) => c.id !== id);
+      if (!run.controls.length && run.state === 'waiting') run.state = 'running';
     }
   }
   if (event === 'run.completed') {
@@ -60,35 +115,40 @@ export class HermesAdapter {
     return response.json();
   }
   async models() {
+    // Feature detection, not version checks: Hermes describes its own API. A feature counts when
+    // its flag is set or, should a release drop the flag, when its route is advertised.
     const capabilities = await this.request('/v1/capabilities');
-    for (const feature of ['run_status', 'run_events_sse', 'run_stop']) if (!capabilities.features?.[feature]) throw new Error(`Hermes is missing ${feature}. Update Hermes before connecting.`);
+    const required = { run_status: 'run_status', run_events_sse: 'run_events', run_stop: 'run_stop' };
+    for (const [feature, endpoint] of Object.entries(required)) {
+      if (!capabilities.features?.[feature] && !capabilities.endpoints?.[endpoint]) throw new Error(`Hermes is missing ${feature}. Update Hermes before connecting.`);
+    }
     const aliases = await this.request('/v1/models');
     const routes = new Map((aliases.data ?? []).map((entry) => [entry.id, { model: entry.id }]));
-    const options = Object.fromEntries([...routes.keys()].map((id) => [id, { efforts: EFFORTS }]));
+    const options = Object.fromEntries([...routes.keys()].map((id) => [id, { efforts: DEFAULT_EFFORTS }]));
     let defaultRoute;
     try {
       const inventory = await this.request('/api/model/options?include_unconfigured=false');
       defaultRoute = `${inventory.provider}/${inventory.model}`;
       for (const provider of inventory.providers ?? []) {
-        if (provider.authenticated !== true || typeof provider.slug !== 'string') continue;
-        const unavailable = new Set((provider.unavailable_models ?? []).map((entry) => typeof entry === 'string' ? entry : entry.id));
+        if (provider?.authenticated !== true || typeof provider.slug !== 'string') continue;
+        const unavailable = new Set((provider.unavailable_models ?? []).map((entry) => typeof entry === 'string' ? entry : entry?.id));
         for (const model of provider.models ?? []) {
-          const id = typeof model === 'string' ? model : model.id;
+          const id = typeof model === 'string' ? model : model?.id;
           if (typeof id !== 'string' || unavailable.has(id)) continue;
           routes.set(`${provider.slug}/${id}`, { provider: provider.slug, model: id });
-          const caps = provider.capabilities?.[id];
-          const advertised = Array.isArray(caps?.supported_efforts) ? EFFORTS.filter((e) => caps.supported_efforts.includes(e)) : EFFORTS;
+          const caps = object(provider.capabilities?.[id]);
+          const advertised = Array.isArray(caps?.supported_efforts) ? orderEfforts(caps.supported_efforts) : DEFAULT_EFFORTS;
           options[`${provider.slug}/${id}`] = { efforts: caps?.reasoning === false ? [] : advertised.filter((effort) => effort !== 'none' || caps?.can_disable_reasoning !== false) };
         }
       }
     } catch (error) {
-      // Older Hermes versions have only the compatibility aliases. A real auth or
+      // A Hermes without the catalogue has only the compatibility aliases. A real auth or
       // provider failure must remain visible instead of silently hiding the catalogue.
-      if (error.status !== 404) throw error;
+      if (![404, 405].includes(error.status)) throw error;
     }
     for (const [route, efforts] of Object.entries(this.config.modelEfforts ?? {})) {
-      if (!Array.isArray(efforts) || efforts.some((effort) => !EFFORTS.includes(effort)) || new Set(efforts).size !== efforts.length) throw new Error(`Invalid modelEfforts for ${route}. Use distinct Hermes effort names.`);
-      if (routes.has(route)) options[route] = { efforts: EFFORTS.filter((e) => efforts.includes(e)) };
+      if (!Array.isArray(efforts) || efforts.some((effort) => !KNOWN_EFFORTS.includes(effort)) || new Set(efforts).size !== efforts.length) throw new Error(`Invalid modelEfforts for ${route}. Use distinct Hermes effort names.`);
+      if (routes.has(route)) options[route] = { efforts: KNOWN_EFFORTS.filter((e) => efforts.includes(e)) };
     }
     if (routes.has('hermes-agent') && options[defaultRoute] && !Object.hasOwn(this.config.modelEfforts ?? {}, 'hermes-agent')) options['hermes-agent'] = options[defaultRoute];
     this.modelRoutes = routes;
@@ -115,6 +175,8 @@ export class HermesAdapter {
       result = result.session ?? result;
       if ((result.id ?? result.session_id) !== id || result.source !== 'api_server') throw new Error('The upstream session identity belongs to another surface.');
     }
+    // Current Hermes wraps the row as { object, session }; older ones returned it bare.
+    result = result.session ?? result;
     return result.id ?? result.session_id ?? id;
   }
   async start(run, session) {
@@ -131,12 +193,16 @@ export class HermesAdapter {
     const response = await fetch(`${this.config.upstreamUrl.replace(/\/+$/, '')}/v1/runs/${encodeURIComponent(run.upstreamId)}/events`, {
       headers: { Authorization: `Bearer ${this.config.upstreamKey}`, ...(run.hermesSeq === undefined ? {} : { 'Last-Event-ID': String(run.hermesSeq) }) }, signal,
     });
+    // No live stream for this run (Hermes restarted, or already retired it): its status is still
+    // polled, so the turn finishes from that instead of reporting a broken connection.
+    if (response.status === 404) { await response.body?.cancel(); return; }
     for await (const item of sse(response)) {
-      const seq = item.data.seq ?? (item.id === undefined ? undefined : Number(item.id));
+      const data = object(item.data) ?? {};
+      const seq = data.seq ?? (item.id === undefined ? undefined : Number(item.id));
       if (seq !== undefined && seq <= (run.hermesSeq ?? -1)) continue;
       await update((r) => {
         r.error = undefined;
-        applyHermesEvent(r, item.data.event ?? item.event, item.data);
+        applyHermesEvent(r, data.event ?? item.event, data);
         if (Number.isInteger(seq)) r.hermesSeq = seq;
       });
       if (terminal(run.state)) return;
@@ -158,8 +224,9 @@ export class HermesAdapter {
       else if (status.status === 'unknown') { r.state = 'unknown'; r.error = 'Hermes restarted with an unknown execution outcome. Resolve it on the host before continuing.'; }
       else {
         r.state = status.status?.startsWith('waiting') ? 'waiting' : status.status === 'stopping' ? 'stopping' : 'running';
-        if (status.pending_controls) {
-          r.controls = status.pending_controls.map((c) => ({ id: c.prompt_id ?? c.request_id, kind: c.kind?.includes('clar') ? 'clarification' : 'approval', prompt: c.prompt ?? c.description ?? c.question ?? JSON.stringify(c), choices: c.kind?.includes('clar') ? undefined : ['once', 'deny'], generation: c.execution_generation }));
+        if (Array.isArray(status.pending_controls)) {
+          r.controls = status.pending_controls.map((c) => object(c) && control(c, controlKind(c.kind))).filter(Boolean);
+          if (r.controls.length && r.state === 'running') r.state = 'waiting';
         }
       }
     });

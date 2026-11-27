@@ -3,7 +3,7 @@ import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/s
 import { localToolsOn } from '@/store/localModels';
 import { useUI } from '@/store/ui';
 import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
-import { autoCompress, buildWire, compactEnd, compactHistory, historyOf, historyTokens, unitsOf } from './context';
+import { autoCompress, buildWire, compactEnd, compactHistory, historyTokens, historyUnits, unitsOf } from './context';
 import { compactRequest, dismissCompactionError, setCompaction } from './compact';
 import { ensureMemoryBase, extractMemories, memoryOn } from './memory';
 import { compactCommand, goalCommand, goalControl, planCommand, planControl, studyCommand, studyControl, type GoalCommand } from './commands';
@@ -66,6 +66,9 @@ const withAnswerNow = (messages: WireMessage[]) => withRequest(messages, ANSWER_
 
 // Batch tokens so the store (and the markdown re-render) updates at most ~25 times a second.
 const FLUSH_MS = 40;
+// Tool call arguments longer than this, still being written, are parsed for the chat at most this often.
+const DRAFT_FREE_CHARS = 2000;
+const DRAFT_PARSE_MS = 250;
 
 /** Whether a request failed because the prompt is longer than the model's context window. */
 function isOverflow(e: unknown) {
@@ -557,7 +560,7 @@ export async function compactChat(id: string, focus = '') {
         try {
           const current = useChats.getState().conversations[id];
           if (!current) throw new Error('This chat no longer exists.');
-          const messages = await buildWire(unitsOf(historyOf(current)), current.compressions ?? [], {
+          const messages = await buildWire(historyUnits(current), current.compressions ?? [], {
             endpointType: endpoint.type,
             withTools,
             tagged: withTools,
@@ -684,21 +687,36 @@ async function runCompletion(
   let reasoningBuffer = '';
   // Tool calls the model is still writing in the current response, by stream index, with the id
   // their part has in the reply. Shown as they grow, then swapped for the finished calls.
-  const drafts = new Map<number, { draft: ToolCallDraft; partId: string }>();
+  // `parsedAt`: when the draft's arguments were last parsed for the chat.
+  const drafts = new Map<number, { draft: ToolCallDraft; partId: string; parsedAt?: number }>();
   const changedDrafts = new Set<number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const flush = () => {
+  // `final` shows every draft as it stands, at the end of a response.
+  const flush = (final = false) => {
     if (timer) clearTimeout(timer);
     timer = null;
-    const parts = [...changedDrafts].map((index): ToolPart => {
-      const { draft, partId } = drafts.get(index)!;
-      return { type: 'tool', id: partId, name: draft.name, input: draftInput(draft.args), status: 'writing' };
-    });
+    const now = Date.now();
+    const parts: ToolPart[] = [];
+    for (const index of changedDrafts) {
+      const entry = drafts.get(index);
+      if (!entry) {
+        changedDrafts.delete(index);
+        continue;
+      }
+      const { draft, partId, parsedAt } = entry;
+      // Long arguments (a whole file being written) are parsed again, and the row redrawn, a few
+      // times a second rather than with every flush: each parse reads them from the start.
+      if (!final && parsedAt != null && draft.args.length > DRAFT_FREE_CHARS && now - parsedAt < DRAFT_PARSE_MS) continue;
+      entry.parsedAt = now;
+      changedDrafts.delete(index);
+      parts.push({ type: 'tool', id: partId, name: draft.name, input: draftInput(draft.args), status: 'writing' });
+    }
     // One store update for all of it, so the chat renders once per flush rather than once per kind.
     useChats.getState().appendStream(id, replyId, { reasoning: reasoningBuffer, text: buffer, drafts: parts });
     buffer = '';
     reasoningBuffer = '';
-    changedDrafts.clear();
+    // Drafts held back go out with a later flush.
+    if (changedDrafts.size) timer = setTimeout(flush, FLUSH_MS);
   };
 
   // Wall time of the current stretch of thinking, recorded on its part when answer text or the
@@ -762,7 +780,7 @@ async function runCompletion(
   const buildMessages = () => {
     const current = useChats.getState().conversations[id];
     if (!current) return Promise.resolve([]);
-    return buildWire(unitsOf(historyOf(current, replyId)), current.compressions ?? [], {
+    return buildWire(historyUnits(current, replyId), current.compressions ?? [], {
       endpointType: endpoint.type,
       withTools: !!tools,
       tagged: !!tools,
@@ -835,7 +853,7 @@ async function runCompletion(
               markThoughtDone();
               const partId =
                 drafts.get(draft.index)?.partId ?? (takenIds().has(draft.id) ? `${draft.id}_${uid()}` : draft.id);
-              drafts.set(draft.index, { draft, partId });
+              drafts.set(draft.index, { draft, partId, parsedAt: drafts.get(draft.index)?.parsedAt });
               changedDrafts.add(draft.index);
               timer ??= setTimeout(flush, FLUSH_MS);
             },
@@ -854,7 +872,7 @@ async function runCompletion(
           if (!retry) throw e;
         }
       }
-      flush();
+      flush(true);
       markThoughtDone();
       if (!result) {
         // The step's thoughts stay; its unfinished calls go, and so does text the answer will replace.
@@ -942,7 +960,7 @@ async function runCompletion(
     }
     useChats.getState().updateMessage(id, replyId, { status: 'done', error: undefined, interrupted, answerNow: undefined });
   } catch (e) {
-    flush();
+    flush(true);
     markThoughtDone();
     const content = interruptContent(reply()?.content ?? []);
     if (controller.signal.aborted) {

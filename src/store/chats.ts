@@ -4,7 +4,8 @@ import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
 import { deleteAttachment } from '@/lib/attachments';
 import type { AttachmentPart, ContentPart, Role, ToolPart } from '@/lib/providers';
-import { splitJsonFileStorage, uid } from '@/lib/storage';
+import { interruptContent, isDraft, previewOf, summarize, type ChatSummary } from '@/lib/chatIndex';
+import { isStub, loadStub, restub, splitJsonFileStorage, stubLoaded, stubSummary, uid } from '@/lib/storage';
 import { chatWorkspace } from '@/lib/workspace';
 import type { Memory } from './memory';
 import type { SkillRef } from './skills';
@@ -271,11 +272,6 @@ interface ChatsState {
   insert: (conversation: Conversation) => void;
 }
 
-/** A tool call the model is still writing. */
-function isDraft(part: ContentPart): boolean {
-  return part.type === 'tool' && part.status === 'writing';
-}
-
 function withText(content: ContentPart[], text: string): ContentPart[] {
   const last = content[content.length - 1];
   return last?.type === 'text'
@@ -331,6 +327,83 @@ export function takeCutOffReplies(): string[] {
   return ids;
 }
 
+/**
+ * What a chat keeps in its own file, read the first time it's used (see lib/storage): every other
+ * field is in the chat list, read at launch. Code reading these off an unloaded chat gets them all
+ * the same, read from disk there and then.
+ */
+const HEAVY = ['messages', 'forks', 'notes', 'compressions', 'observed', 'memoryBase', 'skillBase'] as const;
+
+/**
+ * A reply, tool call or background job that was running when the app was killed can never finish.
+ * Settles a message so, or returns it as it is.
+ */
+function settleMessage(m: Message, local: boolean): Message {
+  const lost = m.content.some((p) => p.type === 'tool' && p.background?.status === 'running');
+  const cut = m.status === 'streaming' && local;
+  if (!lost && !cut) return m;
+  const content = lost
+    ? m.content.map((p) =>
+        p.type === 'tool' && p.background?.status === 'running' ? { ...p, background: { ...p.background, status: 'lost' as const } } : p
+      )
+    : m.content;
+  return cut ? { ...m, status: 'done', content: interruptContent(content), interrupted: 'Interrupted when the app closed' } : { ...m, content };
+}
+
+/** The list with its messages settled, or the very same list when none needed it. */
+function settleList(list: Message[], local: boolean): Message[] {
+  let out = list;
+  for (let i = 0; i < list.length; i++) {
+    const m = settleMessage(list[i], local);
+    if (m === list[i]) continue;
+    if (out === list) out = list.slice();
+    out[i] = m;
+  }
+  return out;
+}
+
+/** Settles a chat as read from disk, in place (see settleMessage); a remote reply carries on remotely. */
+function settleChat(c: Conversation) {
+  const local = (c.backendId ?? 'local') === 'local';
+  c.messages = settleList(c.messages, local);
+  if (!c.forks) return;
+  let forks = c.forks;
+  for (const [key, f] of Object.entries(c.forks)) {
+    let versions = f.versions;
+    for (let v = 0; v < f.versions.length; v++) {
+      const settled = settleList(f.versions[v], local);
+      if (settled === f.versions[v]) continue;
+      if (versions === f.versions) versions = f.versions.slice();
+      versions[v] = settled;
+    }
+    if (versions === f.versions) continue;
+    if (forks === c.forks) forks = { ...c.forks };
+    forks[key] = { ...f, versions };
+  }
+  c.forks = forks;
+}
+
+/**
+ * A chat read from its file on first use (see lib/storage). `_version` is the store version the
+ * file was written at: migrations of what the file keeps would go here. There are none yet; those
+ * so far only changed listed fields, which `migrate` does for every chat at launch.
+ */
+function reviveChat(c: Conversation, _version: number | undefined) {
+  if (!Array.isArray(c.messages)) c.messages = [];
+  settleChat(c);
+}
+
+/** The list with message `messageId` patched, or null when it isn't there. Looks from the end, where replies stream. */
+function patchIn(list: Message[], messageId: string, fn: (m: Message) => Partial<Message>): Message[] | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].id !== messageId) continue;
+    const next = list.slice();
+    next[i] = { ...list[i], ...fn(list[i]) };
+    return next;
+  }
+  return null;
+}
+
 export const useChats = create<ChatsState>()(
   persist(
     (set, get) => {
@@ -338,18 +411,27 @@ export const useChats = create<ChatsState>()(
         set((s) => {
           const c = s.conversations[id];
           if (!c) return s;
-          return { conversations: { ...s.conversations, [id]: { ...c, ...fn(c) } } };
+          // A chat not loaded yet stays so through changes to what the chat list shows of it
+          // (title, pin, archive); any other change reads it first (see lib/storage restub).
+          const next = isStub(c) ? restub(c, fn(c)) : { ...c, ...fn(c) };
+          return { conversations: { ...s.conversations, [id]: next } };
         });
 
       // A message in a version off screen still takes updates, as from a background job finishing.
       const patchMessage = (id: string, messageId: string, fn: (m: Message) => Partial<Message>) =>
         patchConversation(id, (c) => {
-          const patch = (list: Message[]) => list.map((m) => (m.id === messageId ? { ...m, ...fn(m) } : m));
-          if (c.messages.some((m) => m.id === messageId) || !c.forks) return { messages: patch(c.messages) };
-          const forks = Object.fromEntries(
-            Object.entries(c.forks).map(([key, f]) => [key, { ...f, versions: f.versions.map(patch) }])
-          );
-          return { forks };
+          const messages = patchIn(c.messages, messageId, fn);
+          if (messages) return { messages };
+          for (const [key, f] of Object.entries(c.forks ?? {})) {
+            for (let v = 0; v < f.versions.length; v++) {
+              const version = patchIn(f.versions[v], messageId, fn);
+              if (!version) continue;
+              const versions = f.versions.slice();
+              versions[v] = version;
+              return { forks: { ...c.forks, [key]: { ...f, versions } } };
+            }
+          }
+          return {};
         });
 
       return {
@@ -517,8 +599,15 @@ export const useChats = create<ChatsState>()(
     },
     {
       name: 'chats',
-      // A file per chat, so saving while a reply streams writes that chat rather than every one.
-      storage: splitJsonFileStorage('conversations'),
+      // A file per chat, so saving while a reply streams writes that chat rather than every one,
+      // and launching reads only the chat list: each chat's file is read when first used.
+      storage: splitJsonFileStorage('conversations', {
+        heavy: HEAVY,
+        summarize: (c: Conversation) => summarize(c.messages),
+        revive: reviveChat,
+        // While a reply streams, a save writes just that reply.
+        tail: { field: 'messages', live: (m: Message) => m.status === 'streaming' },
+      }),
       partialize: (s) => ({ conversations: s.conversations }),
       version: 2,
       // v0 chats all worked in one shared workspace; they keep it, while new chats get their own.
@@ -534,23 +623,19 @@ export const useChats = create<ChatsState>()(
         const conversations = (persisted as Pick<ChatsState, 'conversations'>)?.conversations ?? {};
         for (const c of Object.values(conversations)) {
           c.backendId ??= 'local';
-          if (c.queue) c.queue = c.queue.map(({ steer: _, ...q }) => q);
-          const settle = (m: Message): Message => {
-            const content = m.content.map((p) =>
-              p.type === 'tool' && p.background?.status === 'running' ? { ...p, background: { ...p.background, status: 'lost' as const } } : p
-            );
-            return m.status === 'streaming' && c.backendId === 'local'
-              ? { ...m, status: 'done', content: interruptContent(content), interrupted: 'Interrupted when the app closed' }
-              : { ...m, content };
-          };
+          if (c.queue?.some((q) => 'steer' in q)) c.queue = c.queue.map(({ steer: _, ...q }) => q);
           // A reply cut off at the end of the chat is picked up again once the app is up, unless it
           // was already being picked up: the reply itself may be what keeps getting the app killed.
+          if (isStub(c)) {
+            // Not read yet: the chat list says so, and the chat is settled once read (reviveChat).
+            if (stubSummary<ChatSummary>(c)?.r && c.backendId === 'local') cutOffAtLaunch.add(c.id);
+            continue;
+          }
           const last = c.messages[c.messages.length - 1];
           if (last?.role === 'assistant' && last.status === 'streaming' && c.backendId === 'local' && !last.autoResumed) {
             cutOffAtLaunch.add(c.id);
           }
-          c.messages = c.messages.map(settle);
-          for (const f of Object.values(c.forks ?? {})) f.versions = f.versions.map((v) => v.map(settle));
+          settleChat(c);
         }
         return { ...current, conversations };
       },
@@ -558,27 +643,96 @@ export const useChats = create<ChatsState>()(
   )
 );
 
-/**
- * Settles a reply that stopped partway, so the history stays valid for the API: tool calls that
- * never got a result are marked failed, and calls the model never finished writing are dropped.
- */
-export function interruptContent(content: ContentPart[]): ContentPart[] {
-  return content
-    .filter((p) => !isDraft(p))
-    .map((p) =>
-      p.type === 'tool' && p.status === 'running'
-        ? { ...p, status: 'error', output: p.output ?? 'Interrupted before it finished.' }
-        : p
-    );
-}
+export { interruptContent };
 
 export function messageText(message: Pick<Message, 'content'>) {
   return message.content.map((p) => (p.type === 'text' ? p.text : '')).join('');
 }
 
-/** Whether a reply is being written in the chat. Only its last message can be (a steered reply ends before the next starts). */
-export function isWorking(c: Pick<Conversation, 'messages'>) {
+// ---- reading chats without loading them ---------------------------------------------------------
+
+/**
+ * The chat list's summary of a chat whose file hasn't been read (see lib/chatIndex), or undefined
+ * once it has: then its messages cost nothing to use. Code over every chat goes by this, so it
+ * doesn't read every chat file.
+ */
+export function unloadedSummary(c: object): ChatSummary | undefined {
+  return isStub(c) && !stubLoaded(c) ? (stubSummary<ChatSummary>(c) ?? { n: 0 }) : undefined;
+}
+
+/** How many messages the chat has, without loading it. */
+export function messageCount(c: Pick<Conversation, 'messages'>): number {
+  return unloadedSummary(c)?.n ?? c.messages.length;
+}
+
+/** The first line of the last message the user sent, without loading the chat. */
+export function chatPreview(c: Pick<Conversation, 'messages'>): string {
+  const s = unloadedSummary(c);
+  return s ? (s.p ?? '') : previewOf(c.messages);
+}
+
+/**
+ * Whether a reply is being written in the chat. Only its last message can be (a steered reply ends
+ * before the next starts). A built-in reply a chat not loaded yet was writing was cut off when the
+ * app closed (it's settled as the chat is read); a remote one goes on.
+ */
+export function isWorking(c: Pick<Conversation, 'messages' | 'backendId'>) {
+  const s = unloadedSummary(c);
+  if (s) return !!s.w && (c.backendId ?? 'local') !== 'local';
   return c.messages[c.messages.length - 1]?.status === 'streaming';
+}
+
+// Reading chats in the background takes turns with the UI: this long at a time.
+const HYDRATE_SLICE_MS = 8;
+
+const later: (fn: () => void) => () => void =
+  typeof requestIdleCallback === 'function'
+    ? (fn) => {
+        const handle = requestIdleCallback(fn, { timeout: 250 });
+        return () => cancelIdleCallback(handle);
+      }
+    : (fn) => {
+        const handle = setTimeout(fn, 0);
+        return () => clearTimeout(handle);
+      };
+
+/**
+ * Reads every chat not loaded yet, a few at a time while the app is idle, for features that look
+ * through all of them (search). `onProgress` runs after each batch, so results can come in as
+ * chats do, and `onDone` once all are read. Returns a function that stops it.
+ */
+export function hydrateChats({ onProgress, onDone }: { onProgress?: () => void; onDone?: () => void } = {}): () => void {
+  let cancel: (() => void) | null = null;
+  const step = () => {
+    const started = Date.now();
+    let read = false;
+    let more = false;
+    for (const c of Object.values(useChats.getState().conversations)) {
+      if (!isStub(c) || stubLoaded(c)) continue;
+      if (read && Date.now() - started > HYDRATE_SLICE_MS) {
+        more = true;
+        break;
+      }
+      loadStub(c);
+      read = true;
+    }
+    if (read) onProgress?.();
+    if (more) cancel = later(step);
+    else {
+      cancel = null;
+      onDone?.();
+    }
+  };
+  cancel = later(step);
+  return () => {
+    cancel?.();
+    cancel = null;
+  };
+}
+
+/** Every chat read (see hydrateChats), for code about to look through all their messages. */
+export function hydrateAllChats(): Promise<void> {
+  return new Promise((resolve) => hydrateChats({ onDone: resolve }));
 }
 
 /**
@@ -596,7 +750,7 @@ export function useChatList(): Record<string, Conversation> {
         c.pinnedAt,
         c.archivedAt,
         c.projectId,
-        c.messages.length,
+        messageCount(c),
         isWorking(c),
       ])
     )

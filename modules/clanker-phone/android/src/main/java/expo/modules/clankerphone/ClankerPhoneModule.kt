@@ -21,6 +21,7 @@ import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -171,11 +172,34 @@ class ClankerPhoneModule : Module() {
       val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
       var how = ""
       if (!field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-        service.onMain {
-          val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-          clipboard.setPrimaryClip(ClipData.newPlainText("text", text))
+        val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        // The user's clip, put back once the paste is done. Android 10+ only lets the focused app
+        // (or the keyboard) read the clipboard, so this is null while another app is in front.
+        val previous = service.onMain {
+          runCatching { clipboard.primaryClip }.getOrNull()
         }
-        if (!field.performAction(AccessibilityNodeInfo.ACTION_PASTE)) throw PhoneException("The field would not take the text.")
+        service.onMain { clipboard.setPrimaryClip(ClipData.newPlainText("text", text)) }
+        val pasted = try {
+          field.performAction(AccessibilityNodeInfo.ACTION_PASTE).also {
+            // Let the field finish reading the clip before it changes.
+            service.awaitIdle(150, 1000)
+          }
+        } finally {
+          // Even when the call is cancelled, the user's clip goes back.
+          withContext(NonCancellable) {
+            service.onMain {
+              runCatching {
+                when {
+                  previous != null -> clipboard.setPrimaryClip(previous)
+                  // Unreadable or empty before: at least don't leave the typed text behind for the next paste.
+                  Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> clipboard.clearPrimaryClip()
+                  else -> clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+                }
+              }
+            }
+          }
+        }
+        if (!pasted) throw PhoneException("The field would not take the text.")
         how = " (pasted)"
       }
       var note = ""

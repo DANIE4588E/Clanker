@@ -1,4 +1,4 @@
-import { messageText, useChats, type Conversation } from '@/store/chats';
+import { hydrateAllChats, messageText, useChats, type Conversation } from '@/store/chats';
 import { inPool, MemoryError, normalize, poolOf, useMemory, type Memory } from '@/store/memory';
 import { resolveTaskModel, thinkingEffort, useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
@@ -104,9 +104,11 @@ export function memoryDiff(conversation: Conversation) {
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** The search_chats tool: other chats mentioning `query`, most matches first. */
-export function searchChats(query: string, excludeId: string, limit: number) {
+export async function searchChats(query: string, excludeId: string, limit: number) {
   const q = query.trim().toLowerCase();
   if (!q) throw new MemoryError('Pass a query.');
+  // Chats not loaded yet are read first, a few at a time, rather than all at once mid-reply.
+  await hydrateAllChats();
   const found: { c: Conversation; hits: string[] }[] = [];
   for (const c of Object.values(useChats.getState().conversations)) {
     if (c.id === excludeId || !canSee(excludeId, c)) continue;

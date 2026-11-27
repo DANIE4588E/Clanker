@@ -17,7 +17,7 @@ import { useTheme } from '@/lib/theme';
 import { useContextUsage } from '@/lib/usage';
 import { useChatLayer } from '@/lib/useChatLayer';
 import { projectWorkspace } from '@/lib/workspace';
-import { messageText, useChatList } from '@/store/chats';
+import { chatPreview, messageCount, useChatList } from '@/store/chats';
 import { useProjects } from '@/store/projects';
 import { useSettings } from '@/store/settings';
 
@@ -77,7 +77,7 @@ export default function ProjectScreen() {
   const chats = useMemo(() => {
     const rank = (c: { pinnedAt?: number; archivedAt?: number }) => (c.archivedAt ? 2 : c.pinnedAt ? 0 : 1);
     return Object.values(conversations)
-      .filter((c) => c.projectId === id && c.messages.length > 0 && (showArchived || !c.archivedAt))
+      .filter((c) => c.projectId === id && messageCount(c) > 0 && (showArchived || !c.archivedAt))
       .sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
   }, [conversations, id, showArchived]);
 
@@ -139,8 +139,7 @@ export default function ProjectScreen() {
               keyExtractor={(c) => c.id}
               contentContainerStyle={listStyle}
               renderItem={({ item }) => {
-                const lastUser = item.messages.findLast((m) => m.role === 'user');
-                const preview = lastUser ? messageText(lastUser).trim().split('\n')[0] : '';
+                const preview = chatPreview(item);
                 return (
                   <Pressable
                     onPress={() => openProjectChat(id, item.id, true)}

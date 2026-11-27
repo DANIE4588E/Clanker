@@ -2,7 +2,7 @@ import { cloneElement, Fragment, isValidElement, memo, useMemo, useState, type C
 import { Alert, StyleSheet, Text, View, type ImageStyle, type TextStyle, type ViewStyle } from 'react-native';
 import { MarkedLexer, Renderer, useMarkdown, type MarkedStyles } from 'react-native-marked';
 import { FileMentions } from '@/lib/fileMentions';
-import { INLINE_MATH, MATH_LANG, PENDING_MATH_LANG, prepareMath } from '@/lib/math';
+import { INLINE_MATH, MATH_LANG, PENDING_MATH_LANG, prepareMathFrom, type PreparedMath } from '@/lib/math';
 import { openWorkspaceFile } from '@/lib/openFile';
 import { fonts, useTheme, type Colors } from '@/lib/theme';
 import { useWorkspace } from '@/lib/useWorkspace';
@@ -14,20 +14,59 @@ import { MarkdownTable } from './MarkdownTable';
 import { InlineMath, MathBlock } from './MathView';
 import { SelectionArea, useSelectable } from './SelectionArea';
 import { useFadeNodes } from './StreamFade';
-import { Circuit, parseCircuit } from './study/Circuit';
-import { Diagram } from './study/Diagram';
-import { Flashcards, parseFlashcards } from './study/Flashcards';
-import { parseQuiz, Quiz } from './study/Quiz';
-import { parseSlides, Slides } from './study/Slides';
 import { SKIP_SELECTION } from '../../modules/clanker-selection';
 
+type StudyBlock = { parse: (text: string) => unknown; Card: ComponentType<{ source: string }> };
+
+// The study cards and the diagram (with its web view) load the first time a reply has one, rather
+// than at launch.
+/* eslint-disable @typescript-eslint/no-require-imports */
 /** The study plugin's blocks (see lib/study), by their fence's language. */
-const STUDY_BLOCKS = new Map<string, { parse: (text: string) => unknown; Card: ComponentType<{ source: string }>; pending: string }>([
-  ['quiz', { parse: parseQuiz, Card: Quiz, pending: 'Writing quiz…' }],
-  ['flashcards', { parse: parseFlashcards, Card: Flashcards, pending: 'Making flashcards…' }],
-  ['slides', { parse: parseSlides, Card: Slides, pending: 'Making slides…' }],
-  ['circuit', { parse: parseCircuit, Card: Circuit, pending: 'Drawing circuit…' }],
+const STUDY_BLOCKS = new Map<string, { load: () => StudyBlock; pending: string }>([
+  [
+    'quiz',
+    {
+      load: () => {
+        const m = require('./study/Quiz') as typeof import('./study/Quiz');
+        return { parse: m.parseQuiz, Card: m.Quiz };
+      },
+      pending: 'Writing quiz…',
+    },
+  ],
+  [
+    'flashcards',
+    {
+      load: () => {
+        const m = require('./study/Flashcards') as typeof import('./study/Flashcards');
+        return { parse: m.parseFlashcards, Card: m.Flashcards };
+      },
+      pending: 'Making flashcards…',
+    },
+  ],
+  [
+    'slides',
+    {
+      load: () => {
+        const m = require('./study/Slides') as typeof import('./study/Slides');
+        return { parse: m.parseSlides, Card: m.Slides };
+      },
+      pending: 'Making slides…',
+    },
+  ],
+  [
+    'circuit',
+    {
+      load: () => {
+        const m = require('./study/Circuit') as typeof import('./study/Circuit');
+        return { parse: m.parseCircuit, Card: m.Circuit };
+      },
+      pending: 'Drawing circuit…',
+    },
+  ],
 ]);
+
+const loadDiagram = () => (require('./study/Diagram') as typeof import('./study/Diagram')).Diagram;
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 /** Shown in place of a chart or image block whose JSON is still streaming in. */
 function Pending({ label }: { label: string }) {
@@ -110,9 +149,9 @@ class ChatRenderer extends Renderer {
       if (this.live) return <Pending key={this.getKey()} label="Loading images…" />;
     } else if (lang && STUDY_BLOCKS.has(lang)) {
       const block = STUDY_BLOCKS.get(lang)!;
+      const { parse, Card } = block.load();
       // Study cards keep the user's progress, so they appear only once their JSON is whole.
-      if (block.parse(text)) {
-        const Card = block.Card;
+      if (parse(text)) {
         return (
           <View key={this.getKey()} nativeID={SKIP_SELECTION}>
             <Card source={text} />
@@ -123,6 +162,7 @@ class ChatRenderer extends Renderer {
     } else if (lang === 'mermaid') {
       // Mermaid can't be checked until it's drawn, so it waits for the block to close.
       if (this.live) return <Pending key={this.getKey()} label="Drawing diagram…" />;
+      const Diagram = loadDiagram();
       return (
         <View key={this.getKey()} nativeID={SKIP_SELECTION}>
           <Diagram source={text.trim()} />
@@ -305,7 +345,15 @@ const MarkdownBlock = memo(function MarkdownBlock({ value, live }: { value: stri
 });
 
 function MarkdownInner({ value: raw, live = false }: { value: string; live?: boolean }) {
-  const value = useMemo(() => prepareMath(raw, live), [raw, live]);
+  // Prepared from where the text so far was, so streamed text with math costs its newest lines
+  // rather than all of it (see prepareMathFrom).
+  const [math, setMath] = useState<PreparedMath>(() => prepareMathFrom(raw, live, null));
+  let prepared = math;
+  if (math.raw !== raw || math.live !== live) {
+    prepared = prepareMathFrom(raw, live, math);
+    setMath(prepared);
+  }
+  const value = prepared.out;
   const [split, setSplit] = useState<Split>(() => ({ text: value, blocks: splitBlocks(value, null) }));
   let blocks = split.blocks;
   if (split.text !== value) {

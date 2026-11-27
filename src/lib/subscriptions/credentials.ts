@@ -13,11 +13,12 @@ export type SubscriptionCredentials = {
   plan?: string;
 };
 
-// Keep each SecureStore item safely under Android's 2048-byte limit.
+// Keep each SecureStore item safely under Android's 2048-byte limit. The chunked helpers are also
+// used for other secrets (lib/secrets).
 const CHUNK_SIZE = 1600;
 const CHUNK_PREFIX = 'chunks:';
 
-async function setChunked(key: string, value: string | undefined) {
+export async function setChunked(key: string, value: string | undefined) {
   await deleteChunked(key);
   if (!value) return;
   if (value.length <= CHUNK_SIZE) {
@@ -31,7 +32,7 @@ async function setChunked(key: string, value: string | undefined) {
   await SecureStore.setItemAsync(key, `${CHUNK_PREFIX}${count}`);
 }
 
-async function getChunked(key: string): Promise<string | null> {
+export async function getChunked(key: string): Promise<string | null> {
   const head = await SecureStore.getItemAsync(key);
   if (!head) return null;
   if (!head.startsWith(CHUNK_PREFIX)) return head;
@@ -42,7 +43,7 @@ async function getChunked(key: string): Promise<string | null> {
   return parts.join('');
 }
 
-async function deleteChunked(key: string) {
+export async function deleteChunked(key: string) {
   const head = await SecureStore.getItemAsync(key).catch(() => null);
   if (head?.startsWith(CHUNK_PREFIX)) {
     const count = parseInt(head.slice(CHUNK_PREFIX.length), 10);

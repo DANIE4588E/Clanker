@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { defaultEffort, isSubscriptionType, type Endpoint } from '@/lib/providers';
+import { endpointHeaderSecrets, persistedEndpoint } from '@/lib/secrets';
 import { apiKeys, jsonFileStorage } from '@/lib/storage';
 import { subscriptionAuth } from '@/lib/subscriptions/credentials';
 import { useSubscriptionUsage } from './subscriptionUsage';
@@ -154,9 +155,12 @@ export const useSettings = create<SettingsState>()(
       friendlyModelNames: true,
       chatDetail: 'normal',
       followUp: 'queue',
-      upsertEndpoint: (endpoint) => {
-        const exists = get().endpoints.some((e) => e.id === endpoint.id);
-        const endpoints = exists
+      upsertEndpoint: (next) => {
+        const existing = get().endpoints.find((e) => e.id === next.id);
+        // No headers means "unchanged" (an endpoint read before its headers were loaded from the
+        // keychain); the editor always passes them, as an empty set when there are none.
+        const endpoint = next.headers === undefined && existing?.headers ? { ...next, headers: existing.headers } : next;
+        const endpoints = existing
           ? get().endpoints.map((e) => (e.id === endpoint.id ? endpoint : e))
           : [...get().endpoints, endpoint];
         let active = get().active;
@@ -223,6 +227,8 @@ export const useSettings = create<SettingsState>()(
       name: 'settings',
       storage: jsonFileStorage,
       version: 3,
+      // Endpoint headers are kept in the keychain (lib/secrets), and left out here once they're there.
+      partialize: (s) => ({ ...s, endpoints: s.endpoints.map(persistedEndpoint) }),
       migrate: (persisted, version) => {
         const state = persisted as SettingsState & { contextBudget?: number };
         // v0 had one budget for every model whose window wasn't known; keep it on those models.
@@ -262,6 +268,8 @@ export const useSettings = create<SettingsState>()(
     }
   )
 );
+
+endpointHeaderSecrets.attach(useSettings);
 
 /** The model's effort levels and the one to use, or null when it has no effort control. */
 export function resolveEffort(state: Pick<SettingsState, 'endpoints' | 'efforts'>, ref: ModelRef | null) {

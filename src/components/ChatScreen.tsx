@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import * as Haptics from '@/lib/haptics';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, AppState, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -230,11 +230,19 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
     });
   }, [onBack]);
 
+  // What the box holds, for the message actions below: read when they run rather than closed over,
+  // so typing doesn't make new callbacks and re-render every message in the list.
+  const box = useRef({ draft, quotes, attachments, editing });
+  useLayoutEffect(() => {
+    box.current = { draft, quotes, attachments, editing };
+  });
+
   const onEdit = useCallback(
     (messageId: string) => {
       if (!currentId || streaming) return;
       const message = useChats.getState().conversations[currentId]?.messages.find((m) => m.id === messageId);
       if (!message) return;
+      const { draft, quotes, attachments, editing } = box.current;
       // Switching to another message's edit keeps what the box held before the first one.
       if (editing) for (const a of attachments) if (a.file) deleteAttachment(a.file);
       const stash = editing?.stash ?? { draft, quotes, attachments };
@@ -244,7 +252,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
       setQuotes(parts.quotes);
       setAttachments(attachmentsForEdit(currentId, messageId));
     },
-    [attachments, currentId, draft, editing, quotes, streaming]
+    [currentId, streaming]
   );
 
   const onBranch = useCallback(
@@ -252,6 +260,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
       if (!currentId || streaming) return;
       const messages = useChats.getState().conversations[currentId]?.messages ?? [];
       const next = messages[messages.findIndex((m) => m.id === messageId) + 1];
+      const { attachments, editing } = box.current;
       // What the box held is replaced, an edit's put-aside draft included; unsent, its files go.
       const dropped = [...attachments, ...(editing?.stash.attachments ?? [])];
       try {
@@ -269,7 +278,7 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
       setQuotes(parts.quotes);
       setAttachments(attachmentsForEdit(currentId, next.id));
     },
-    [attachments, currentId, editing, open, streaming]
+    [currentId, open, streaming]
   );
 
   const onRegenerate = useCallback(

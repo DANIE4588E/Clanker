@@ -1,16 +1,21 @@
 import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import { Directory, File, Paths } from 'expo-file-system';
 import { startActivityAsync } from 'expo-intent-launcher';
 import { Platform } from 'react-native';
+import { ClankerUpdate } from '../../modules/clanker-update';
 
 /**
  * Updates come from the newest GitHub release that has an APK attached, tagged with the app
  * version it carries (`v1.2.0`, `1.2.0` or `v1.2.0-beta.1`), across all the repos below.
  * Pre-releases count only when asked for. Android only: iOS apps can't install themselves.
+ *
+ * A release can carry one APK per CPU ABI (`clanker-1.2.0-arm64-v8a.apk`, see
+ * scripts/build-apk.mjs) beside the universal `clanker-1.2.0.apk`; the one for this device's ABI
+ * is downloaded when it's there.
  */
 
-// Both accounts publish releases; the old one is suspended for now, and answers 404 until it's back.
-const REPOS = ['danielyongzx1/Clanker', 'DANIE4588E/Clanker'];
+const REPOS = ['danielyongzx1/Clanker'];
 const CHECK_TIMEOUT = 15_000;
 const APK_TYPE = 'application/vnd.android.package-archive';
 // Intent.FLAG_GRANT_READ_URI_PERMISSION, so the installer can read the APK through the content URI.
@@ -71,8 +76,24 @@ type GitHubRelease = {
   assets: { name: string; browser_download_url: string; size: number }[];
 };
 
+// The ABIs build-apk.mjs splits APKs by, named as the asset's suffix.
+const KNOWN_ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'];
+// This device's ABIs, most preferred first (Build.SUPPORTED_ABIS on Android).
+const deviceAbis = (Device.supportedCpuArchitectures ?? []).map((abi) => abi.toLowerCase());
+
+/** The APK for this device's ABI, else the universal one (no ABI suffix), else any APK. */
+function pickApk(assets: GitHubRelease['assets']) {
+  const apks = assets.filter((a) => a.name.toLowerCase().endsWith('.apk'));
+  const abiOf = (name: string) => KNOWN_ABIS.find((abi) => name.toLowerCase().endsWith(`-${abi}.apk`));
+  for (const abi of deviceAbis) {
+    const match = apks.find((a) => abiOf(a.name) === abi);
+    if (match) return match;
+  }
+  return apks.find((a) => !abiOf(a.name)) ?? apks[0];
+}
+
 function toRelease(json: GitHubRelease): Release | null {
-  const apk = json.assets.find((a) => a.name.toLowerCase().endsWith('.apk'));
+  const apk = pickApk(json.assets);
   if (!apk) return null;
   const version = json.tag_name.replace(/^v/i, '');
   return { version, notes: json.body ?? '', apkUrl: apk.browser_download_url, apkSize: apk.size };
@@ -120,7 +141,9 @@ export async function downloadRelease(release: Release, onProgress: (fraction: n
   const dir = new Directory(Paths.cache, 'updates');
   if (dir.exists) dir.delete();
   dir.create();
-  return File.downloadFileAsync(release.apkUrl, new File(dir, `clanker-${release.version}.apk`), {
+  // The version comes from a release tag, so keep only characters safe in a file name.
+  const safeVersion = release.version.replace(/[^\w.-]/g, '_').replace(/^\.+/, '') || 'update';
+  return File.downloadFileAsync(release.apkUrl, new File(dir, `clanker-${safeVersion}.apk`), {
     signal,
     onProgress: ({ bytesWritten, totalBytes }) => {
       const total = totalBytes > 0 ? totalBytes : release.apkSize;
@@ -132,8 +155,18 @@ export async function downloadRelease(release: Release, onProgress: (fraction: n
 /**
  * Hands the APK to the system installer, which asks the user to allow installs from Clanker the
  * first time. Resolves when they come back, unless the update replaced the running app.
+ *
+ * First checks the APK is signed by the same key as this app, so a tampered or look-alike
+ * download is refused here rather than offered to the installer. Builds made before that check
+ * existed have no native side for it and skip it (Android's installer still refuses a mismatch).
  */
 export async function installApk(file: File) {
   if (!file.exists) throw new Error('The download is gone. Download the update again.');
+  if (ClankerUpdate?.isSignedBySameKey && !(await ClankerUpdate.isSignedBySameKey(file.uri))) {
+    try {
+      file.delete();
+    } catch {}
+    throw new Error("This download isn't signed by the same key as your installed Clanker, so it won't be installed.");
+  }
   await startActivityAsync('android.intent.action.VIEW', { data: file.contentUri, type: APK_TYPE, flags: GRANT_READ });
 }

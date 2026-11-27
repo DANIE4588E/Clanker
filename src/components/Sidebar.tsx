@@ -1,11 +1,20 @@
 import Feather from '@expo/vector-icons/Feather';
 import { router } from 'expo-router';
 import type { DrawerContentComponentProps } from 'expo-router/drawer';
-import { useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/lib/theme';
-import { isWorking, messageText, useChatList, type Conversation } from '@/store/chats';
+import {
+  hydrateChats,
+  isWorking,
+  messageCount,
+  messageText,
+  unloadedSummary,
+  useChatList,
+  type Conversation,
+  type Message,
+} from '@/store/chats';
 import { useProjects, type Project } from '@/store/projects';
 import { useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
@@ -18,6 +27,15 @@ type Item = { kind: 'project'; project: Project } | { kind: 'chat'; chat: Conver
 type Section = { title: string; data: Item[] };
 
 const chatItem = (chat: Conversation): Item => ({ kind: 'chat', chat });
+
+// Each message's text in lower case, for search: worked out once per message, not per keystroke.
+const lowered = new WeakMap<Message, string>();
+
+function lowerText(m: Message) {
+  let text = lowered.get(m);
+  if (text === undefined) lowered.set(m, (text = messageText(m).toLowerCase()));
+  return text;
+}
 
 function groupByDate(conversations: Conversation[]): Section[] {
   const startOfToday = new Date().setHours(0, 0, 0, 0);
@@ -49,13 +67,22 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
   });
   const { show: showChatMenu, menu: chatMenu } = useChatMenu();
   const [query, setQuery] = useState('');
+  // Looking through every chat trails the typing rather than holding up each keystroke.
+  const searched = useDeferredValue(query);
+  const searching = !!searched.trim();
+  // Searching reads the chats not loaded yet in the background; matches in them come in as they're read.
+  const [chatsRead, setChatsRead] = useState(0);
+  useEffect(() => {
+    if (!searching) return;
+    return hydrateChats({ onProgress: () => setChatsRead((n) => n + 1) });
+  }, [searching]);
 
   const sections = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = searched.trim().toLowerCase();
     const matches = (c: Conversation) =>
-      !q || c.title.toLowerCase().includes(q) || c.messages.some((m) => messageText(m).toLowerCase().includes(q));
+      !q || c.title.toLowerCase().includes(q) || (!unloadedSummary(c) && c.messages.some((m) => lowerText(m).includes(q)));
     const chats = Object.values(conversations)
-      .filter((c) => c.messages.length > 0 && (showArchived || !c.archivedAt) && matches(c))
+      .filter((c) => messageCount(c) > 0 && (showArchived || !c.archivedAt) && matches(c))
       .sort((a, b) => b.updatedAt - a.updatedAt);
 
     // Pinned projects and chats come first, in the order they were pinned, wherever the chats live.
@@ -76,20 +103,75 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
         : []
       ).filter((s) => s.data.length),
     ];
-  }, [conversations, projects, query, showArchived]);
+    // Again as chats are read (chatsRead): their messages can match now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations, projects, searched, showArchived, chatsRead]);
 
-  const select = (id: string | null) => {
-    navigation.closeDrawer();
-    // A project's chats open over its page, with a back button to it.
-    const projectId = id ? conversations[id]?.projectId : undefined;
-    if (id && projectId) openProjectChat(projectId, id);
-    else open(id);
-  };
+  const select = useCallback(
+    (id: string | null) => {
+      navigation.closeDrawer();
+      // A project's chats open over its page, with a back button to it.
+      const projectId = id ? conversations[id]?.projectId : undefined;
+      if (id && projectId) openProjectChat(projectId, id);
+      else open(id);
+    },
+    [navigation, conversations, open]
+  );
 
-  const goTo = (href: '/projects' | '/library' | '/skills' | '/plugins' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
-    navigation.closeDrawer();
-    router.push(href);
-  };
+  const goTo = useCallback(
+    (href: '/projects' | '/library' | '/skills' | '/plugins' | '/usage' | { pathname: '/projects/[id]'; params: { id: string } }) => {
+      navigation.closeDrawer();
+      router.push(href);
+    },
+    [navigation]
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: Item }) => {
+      if (item.kind === 'project') {
+        const p = item.project;
+        return (
+          <Pressable
+            onPress={() => goTo({ pathname: '/projects/[id]', params: { id: p.id } })}
+            onLongPress={(e) => showProjectMenu(p, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
+            style={({ pressed }) => [styles.item, styles.row, pressed && { backgroundColor: colors.surfaceHover }]}
+          >
+            <Feather name="folder" size={18} color={colors.textSecondary} />
+            <Text numberOfLines={1} style={[styles.itemText, styles.grow, { color: colors.text }]}>
+              {p.name}
+            </Text>
+          </Pressable>
+        );
+      }
+      const c = item.chat;
+      const project = c.projectId ? projects[c.projectId] : undefined;
+      const working = isWorking(c);
+      return (
+        <Pressable
+          onPress={() => select(c.id)}
+          onLongPress={(e) => showChatMenu(c, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
+          style={({ pressed }) => [
+            styles.item,
+            styles.chatRow,
+            (c.id === currentId || pressed) && { backgroundColor: colors.surfaceHover },
+          ]}
+        >
+          {working && <ActivityIndicator size="small" color={colors.textSecondary} accessibilityLabel="Working" />}
+          <View style={styles.grow}>
+            <Text numberOfLines={1} style={[styles.itemText, { color: colors.text }]}>
+              {c.title}
+            </Text>
+            {project && (
+              <Text numberOfLines={1} style={[styles.itemProject, { color: colors.textTertiary }]}>
+                {project.name}
+              </Text>
+            )}
+          </View>
+        </Pressable>
+      );
+    },
+    [colors, currentId, projects, select, goTo, showChatMenu, showProjectMenu]
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: colors.sidebar, paddingTop: insets.top + 8 }]}>
@@ -161,51 +243,7 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
         renderSectionHeader={({ section }) => (
           <Text style={[styles.section, { color: colors.textTertiary }]}>{section.title}</Text>
         )}
-        renderItem={({ item }) => {
-          if (item.kind === 'project') {
-            const p = item.project;
-            return (
-              <Pressable
-                onPress={() => goTo({ pathname: '/projects/[id]', params: { id: p.id } })}
-                onLongPress={(e) => showProjectMenu(p, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
-                style={({ pressed }) => [styles.item, styles.row, pressed && { backgroundColor: colors.surfaceHover }]}
-              >
-                <Feather name="folder" size={18} color={colors.textSecondary} />
-                <Text numberOfLines={1} style={[styles.itemText, styles.grow, { color: colors.text }]}>
-                  {p.name}
-                </Text>
-              </Pressable>
-            );
-          }
-          const c = item.chat;
-          const project = c.projectId ? projects[c.projectId] : undefined;
-          const working = isWorking(c);
-          return (
-            <Pressable
-              onPress={() => select(c.id)}
-              onLongPress={(e) => showChatMenu(c, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
-              style={({ pressed }) => [
-                styles.item,
-                styles.chatRow,
-                (c.id === currentId || pressed) && { backgroundColor: colors.surfaceHover },
-              ]}
-            >
-              {working && (
-                <ActivityIndicator size="small" color={colors.textSecondary} accessibilityLabel="Working" />
-              )}
-              <View style={styles.grow}>
-                <Text numberOfLines={1} style={[styles.itemText, { color: colors.text }]}>
-                  {c.title}
-                </Text>
-                {project && (
-                  <Text numberOfLines={1} style={[styles.itemProject, { color: colors.textTertiary }]}>
-                    {project.name}
-                  </Text>
-                )}
-              </View>
-            </Pressable>
-          );
-        }}
+        renderItem={renderItem}
         ListEmptyComponent={
           <Text style={[styles.empty, { color: colors.textTertiary }]}>
             {query ? 'No chats found' : 'Your chats will appear here'}

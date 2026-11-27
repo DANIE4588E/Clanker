@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -58,9 +59,11 @@ function fakeServer(behaviour = {}) {
   const fetch = async (url, init = {}) => {
     const headers = init.headers ?? {};
     log.push({ url, method: init.method ?? 'GET', headers, body: init.body });
-    if (url === 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp') return json(200, { resource: SERVER, authorization_servers: [AUTH], scopes_supported: ['read', 'write'] });
+    if (url === 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp')
+      return json(200, { resource: SERVER, authorization_servers: [AUTH], scopes_supported: ['read', 'write'], ...behaviour.resourceMetadata });
+    if (behaviour.elsewhere && url === behaviour.elsewhere.url) return json(200, behaviour.elsewhere.json);
     if (url === `${AUTH}/.well-known/oauth-authorization-server`)
-      return json(200, { authorization_endpoint: `${AUTH}/authorize`, token_endpoint: `${AUTH}/token`, registration_endpoint: `${AUTH}/register` });
+      return json(200, { issuer: AUTH, authorization_endpoint: `${AUTH}/authorize`, token_endpoint: `${AUTH}/token`, registration_endpoint: `${AUTH}/register`, ...behaviour.serverMetadata });
     if (url.startsWith('https://mcp.example.com/.well-known/') || url.startsWith(`${AUTH}/.well-known/`)) return json(404, {});
     if (url === `${AUTH}/register`) return json(201, { client_id: 'client-1', token_endpoint_auth_method: 'none' });
     if (url === `${AUTH}/token`) {
@@ -70,7 +73,8 @@ function fakeServer(behaviour = {}) {
     }
     if (url === SERVER) {
       const auth = headers.Authorization;
-      if (behaviour.open !== true && auth !== `Bearer ${accessToken}`) return json(401, { error: 'invalid_token' }, { 'www-authenticate': 'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"' });
+      const metadataUrl = behaviour.elsewhere?.url ?? 'https://mcp.example.com/.well-known/oauth-protected-resource/mcp';
+      if (behaviour.open !== true && auth !== `Bearer ${accessToken}`) return json(401, { error: 'invalid_token' }, { 'www-authenticate': `Bearer resource_metadata="${metadataUrl}"` });
       const msg = JSON.parse(init.body);
       if (msg.method === 'initialize') {
         sessionCount++;
@@ -110,6 +114,8 @@ function setup(server, { browserResult } = {}) {
   const usePlugins = { getState: () => state };
   const keychain = new Map();
   const opened = [];
+  /** `lock.next` runs as the next refresh takes the lock, standing in for one that finished just before. */
+  const lock = { next: null };
   const providers = load('src/lib/plugins/providers.ts', {});
   // Point Notion's provider at the fake server.
   providers.PROVIDERS.notion.auth = { kind: 'mcp', url: SERVER, prefix: 'notion' };
@@ -124,12 +130,17 @@ function setup(server, { browserResult } = {}) {
       },
     },
     '@/lib/net': { fetch: server.fetch },
-    '@/store/plugins': { usePlugins },
+    '@/store/plugins': { usePlugins, pluginSecretsReady: async () => {} },
     '../subscriptions/credentials': {
       subscriptionAuth: { get: async (s) => keychain.get(s) ?? null, set: async (s, c) => void keychain.set(s, c), remove: async (s) => void keychain.delete(s) },
-      runExclusiveRefresh: (_s, fn) => fn(),
+      runExclusiveRefresh: (_s, fn) => {
+        const before = lock.next;
+        lock.next = null;
+        before?.();
+        return fn();
+      },
     },
-    '../subscriptions/pkce': load('src/lib/subscriptions/pkce.ts', {}),
+    '../subscriptions/pkce': load('src/lib/subscriptions/pkce.ts', { 'expo-crypto': { getRandomValues: (a) => webcrypto.getRandomValues(a) } }),
     './providers': providers,
   };
   const catalog = load('src/lib/plugins/catalog.ts', { '@/store/plugins': { usePlugins }, './providers': providers });
@@ -148,7 +159,7 @@ function setup(server, { browserResult } = {}) {
     '../plugins/mcp': mcp,
     './pluginUtil': pluginUtil,
   });
-  return { state, keychain, opened, mcp, tools, catalog };
+  return { state, keychain, opened, mcp, tools, catalog, lock };
 }
 
 /** A workspace that keeps written files in memory. */
@@ -238,6 +249,81 @@ test('refreshes the token after a 401 and retries', async () => {
   assert.equal(refresh[1].get('resource'), SERVER);
   assert.equal(ctx.keychain.get('plugin_notion').accessToken, 'at-2');
   assert.equal(ctx.state.mcp.notion.tools.length, 2);
+});
+
+test('a redirect without the state is refused', async () => {
+  const server = fakeServer();
+  const ctx = setup(server, { browserResult: (_u, redirect) => ({ type: 'success', url: `${redirect}?code=the-code` }) });
+  await assert.rejects(ctx.mcp.connectMcp(ctx.catalog.pluginById('notion')), /state mismatch/);
+  assert.equal(server.log.some((r) => r.url === `${AUTH}/token`), false);
+});
+
+test('a refresh that waited for another one uses its tokens', async () => {
+  const server = fakeServer({ expire: true });
+  const ctx = setup(server);
+  await ctx.mcp.connectMcp(ctx.catalog.pluginById('notion'));
+  const before = server.log.filter((r) => r.url === `${AUTH}/token`).length;
+  // Expired on disk, but another request refreshed it while this one waited for the lock.
+  ctx.keychain.set('plugin_notion', { accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() - 1000 });
+  ctx.lock.next = () => ctx.keychain.set('plugin_notion', { accessToken: 'at-2', refreshToken: 'rt-2', expiresAt: Date.now() + 3600_000 });
+  await ctx.mcp.refreshMcpTools('notion');
+  assert.equal(server.log.filter((r) => r.url === `${AUTH}/token`).length, before);
+  assert.equal(server.log.at(-1).headers.Authorization, 'Bearer at-2');
+});
+
+const refused = /don’t check out/;
+
+test('discovery refuses resource metadata for another server', async () => {
+  const server = fakeServer({ resourceMetadata: { resource: 'https://other.example.com/mcp' } });
+  const ctx = setup(server);
+  await assert.rejects(ctx.mcp.connectMcp(ctx.catalog.pluginById('notion')), refused);
+  assert.equal(server.log.some((r) => r.url.startsWith(AUTH)), false, 'never asks its authorization server');
+});
+
+test('discovery skips metadata elsewhere that names another resource', async () => {
+  const server = fakeServer({ elsewhere: { url: 'https://evil.example.org/prm', json: { resource: 'https://evil.example.org/', authorization_servers: ['https://evil.example.org'] } } });
+  const ctx = setup(server);
+  await ctx.mcp.connectMcp(ctx.catalog.pluginById('notion'));
+  assert.equal(server.log.some((r) => r.url.startsWith('https://evil.example.org/.well-known')), false);
+  assert.equal(ctx.state.mcp.notion.oauth.tokenEndpoint, `${AUTH}/token`);
+});
+
+test('discovery accepts metadata elsewhere that names this server', async () => {
+  const server = fakeServer({ elsewhere: { url: 'https://meta.example.org/prm', json: { resource: SERVER, authorization_servers: [AUTH] } } });
+  const ctx = setup(server);
+  await ctx.mcp.connectMcp(ctx.catalog.pluginById('notion'));
+  assert.equal(ctx.state.mcp.notion.oauth.resource, SERVER);
+});
+
+test('discovery refuses an authorization server whose issuer differs', async () => {
+  for (const serverMetadata of [{ issuer: 'https://evil.example.org' }, { issuer: undefined }]) {
+    const server = fakeServer({ serverMetadata });
+    const ctx = setup(server);
+    await assert.rejects(ctx.mcp.connectMcp(ctx.catalog.pluginById('notion')), refused);
+    assert.equal(server.log.some((r) => r.url === `${AUTH}/register`), false);
+  }
+});
+
+test('discovery refuses endpoints that aren’t https', async () => {
+  for (const serverMetadata of [
+    { token_endpoint: 'http://auth.example.com/token' },
+    { authorization_endpoint: 'http://auth.example.com/authorize' },
+    { registration_endpoint: 'http://auth.example.com/register' },
+    { revocation_endpoint: 'http://auth.example.com/revoke' },
+  ]) {
+    const ctx = setup(fakeServer({ serverMetadata }));
+    await assert.rejects(ctx.mcp.connectMcp(ctx.catalog.pluginById('notion')), refused, JSON.stringify(serverMetadata));
+  }
+  const ctx = setup(fakeServer({ resourceMetadata: { authorization_servers: ['http://auth.example.com'] } }));
+  await assert.rejects(ctx.mcp.connectMcp(ctx.catalog.pluginById('notion')), refused);
+});
+
+test('sameUrl compares URLs as parsed', () => {
+  const { mcp } = setup(fakeServer());
+  assert.equal(mcp.sameUrl('https://mcp.example.com', 'https://MCP.example.com/'), true);
+  assert.equal(mcp.sameUrl('https://mcp.example.com/mcp', 'https://mcp.example.com/mcp/'), false);
+  assert.equal(mcp.sameUrl('https://mcp.example.com/mcp', 'http://mcp.example.com/mcp'), false);
+  assert.equal(mcp.sameUrl(undefined, 'https://mcp.example.com'), false);
 });
 
 test('servers that need no account connect without a browser', async () => {

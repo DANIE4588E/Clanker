@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import * as Clipboard from 'expo-clipboard';
 import type { ElementContent, Root } from 'hast';
-import { common, createLowlight } from 'lowlight';
+import type { createLowlight } from 'lowlight';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { fonts, useTheme } from '@/lib/theme';
@@ -11,7 +11,17 @@ import { HorizontalScroll } from './HorizontalScroll';
 import { useSelectable } from './SelectionArea';
 import { useFadeNodes } from './StreamFade';
 
-const lowlight = createLowlight(common);
+let lowlightInstance: ReturnType<typeof createLowlight> | null = null;
+
+// The grammars load, and register, the first time code is highlighted rather than at launch.
+function getLowlight() {
+  if (!lowlightInstance) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { common, createLowlight } = require('lowlight') as typeof import('lowlight');
+    lowlightInstance = createLowlight(common);
+  }
+  return lowlightInstance;
+}
 
 // highlight.js scopes → colors (GitHub light / One Dark).
 const palettes = {
@@ -108,8 +118,8 @@ const HIGHLIGHT_MAX = 20_000;
 function highlight(code: string, language?: string): Root | null {
   try {
     if (code.length > HIGHLIGHT_MAX) return null;
-    if (language && lowlight.registered(language)) return lowlight.highlight(language, code);
-    if (!language && code.length <= AUTO_MAX) return lowlight.highlightAuto(code);
+    if (language && getLowlight().registered(language)) return getLowlight().highlight(language, code);
+    if (!language && code.length <= AUTO_MAX) return getLowlight().highlightAuto(code);
   } catch {}
   return null;
 }
@@ -173,7 +183,7 @@ function CodeBlockInner({
     ? ''
     : !streaming
       ? text
-      : lang && lowlight.registered(lang)
+      : lang && getLowlight().registered(lang)
         ? text.slice(0, catchUpPoint(text))
         : '';
   // Find in chat's matches, found in the whole code so one may run from the highlighted part

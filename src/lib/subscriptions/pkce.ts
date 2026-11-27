@@ -1,6 +1,8 @@
+import { getRandomValues } from 'expo-crypto';
+
 /**
- * Pure-JS PKCE (S256), base64url, and JWT payload helpers.
- * Runs in Hermes / Expo Go / Node without requiring native crypto modules.
+ * PKCE (S256), base64url, and JWT payload helpers. Hashing is pure JS; random bytes come from the
+ * platform's secure generator (expo-crypto), since React Native installs no `crypto` global.
  */
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -112,14 +114,17 @@ export function sha256(input: string | Uint8Array): Uint8Array {
   return out;
 }
 
+/**
+ * Cryptographically secure random bytes, for PKCE verifiers, OAuth `state` and nonces. Throws
+ * rather than fall back to a predictable generator.
+ */
 export function randomBytes(length: number): Uint8Array {
   const bytes = new Uint8Array(length);
-  const webCrypto = (globalThis as { crypto?: { getRandomValues?: (arr: Uint8Array) => Uint8Array } }).crypto;
-  if (webCrypto?.getRandomValues) {
-    webCrypto.getRandomValues(bytes);
-    return bytes;
+  try {
+    getRandomValues(bytes);
+  } catch (e) {
+    throw new Error(`Secure random numbers aren’t available on this device: ${e instanceof Error ? e.message : e}`);
   }
-  for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
   return bytes;
 }
 

@@ -8,6 +8,9 @@ import type { ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './type
 
 /** Room kept for the reply when checking that a prompt fits the context. */
 const REPLY_RESERVE = 512;
+// How much of the end of the text streamed so far a partial result is checked against before its
+// new text is taken as an addition to it.
+const EMIT_CHECK = 256;
 
 export const local: ProviderAdapter = {
   async listModels() {
@@ -63,7 +66,10 @@ export const local: ProviderAdapter = {
       let reasoning = '';
       const ids: string[] = [];
       const emit = (next: string | undefined, prev: string, send?: (t: string) => void) => {
-        if (typeof next !== 'string' || next.length <= prev.length || !next.startsWith(prev)) return prev;
+        // Each partial result carries the whole text so far, so comparing all of it with the last
+        // one on every token grew with the reply. Its end, where the new text joins on, is checked.
+        const from = Math.max(0, prev.length - EMIT_CHECK);
+        if (typeof next !== 'string' || next.length <= prev.length || !next.startsWith(from ? prev.slice(from) : prev, from)) return prev;
         send?.(next.slice(prev.length));
         return next;
       };

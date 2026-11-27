@@ -279,6 +279,12 @@ export async function exchangeClaudeAuthCode(
   session: BrowserCodeSession
 ): Promise<SubscriptionCredentials> {
   const { code, state } = parsePastedAuthCode(pasted);
+  // Claude's callback page shows `code#state`. People sometimes copy only the code, so a paste
+  // without the state is allowed (it's sent with the one this sign-in made), but a different state
+  // means the code came from another sign-in and isn't exchanged.
+  if (state !== undefined && state !== session.pkce.state) {
+    throw new Error('That code is from a different sign-in. Start sign-in again and paste the new code.');
+  }
   const res = await fetch(CLAUDE_OAUTH.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -286,7 +292,7 @@ export async function exchangeClaudeAuthCode(
       grant_type: 'authorization_code',
       client_id: CLAUDE_OAUTH.clientId,
       code,
-      state: state ?? session.pkce.state,
+      state: session.pkce.state,
       redirect_uri: CLAUDE_OAUTH.redirectUri,
       code_verifier: session.pkce.verifier,
     }),
@@ -415,8 +421,10 @@ export function parseAntigravityCallback(url: string, expectedState: string): { 
   }
   const code = parsed.searchParams.get('code');
   if (!code) throw new Error('No authorization code in the Antigravity redirect.');
-  const state = parsed.searchParams.get('state');
-  if (state && state !== expectedState) throw new Error('Antigravity sign-in state mismatch. Try again.');
+  // Google always returns the state it was sent, so a missing one is refused like a wrong one.
+  if (!expectedState || parsed.searchParams.get('state') !== expectedState) {
+    throw new Error('Antigravity sign-in state mismatch. Try again.');
+  }
   return { code };
 }
 

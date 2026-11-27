@@ -1,5 +1,9 @@
 """Expose Hermes's own status-bar metrics through Runs, without changing execution.
 
+Needed while Hermes's Runs module doesn't publish its usage_stats projection
+(0.22.5 through at least 0.23.4). It checks the code, not the version: on a
+Hermes that already publishes it, it reports that and changes nothing.
+
 Use --check before --apply. Apply to an idle gateway, then restart it. Requires
 the canonical Runs implementation with gateway.session_usage.usage_stats.
 """
@@ -58,12 +62,18 @@ SAMPLER = '''    # Clanker compatibility: publish only the native Hermes usage p
 '''
 
 
+class NativeSupport(Exception):
+    """This Hermes already does what the fix adds; nothing to change."""
+
+
 def patch_source(source):
     ast.parse(source)
     if 'def _clanker_run_metrics(' in source:
         if all(marker in source for marker in ('_clanker_metrics_task.cancel()', 'extra["clanker_metrics"]', '"created_at", "clanker_metrics"')):
             return source
         raise ValueError('Incomplete metrics patch; restore the backup before applying.')
+    if 'usage_stats(' in source:
+        raise NativeSupport('This Hermes publishes its usage metrics on Runs itself; no fix needed.')
     anchors = [
         ('async def _execute_run(', HELPER + 'async def _execute_run('),
         ('    def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:', SAMPLER + '    def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:'),
@@ -94,7 +104,11 @@ def main():
         parser.error('This Hermes revision has no gateway/session_usage.py. Update Hermes.')
     original = target.read_bytes()
     source = original.decode('utf-8').replace('\r\n', '\n')
-    updated = patch_source(source)
+    try:
+        updated = patch_source(source)
+    except NativeSupport as native:
+        print(native)
+        return
     if updated == source:
         print('Runs metrics forwarding is already installed.')
         return

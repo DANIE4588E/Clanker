@@ -79,11 +79,11 @@ Enter this value in Clanker's **Bridge token** field. Do not use the agent's ups
    npm start
    ```
 
-The bridge uses authenticated session and Runs APIs, including event replay, approvals, clarification and cancellation. Connection testing verifies the required API features. Use a current Hermes release supporting these endpoints; older servers return an upgrade/setup error. The model list combines the compatibility aliases with the full authenticated provider catalogue from `/api/model/options`. Routes appear as `provider/model`; the exact provider and model are forwarded together, so models with the same name on two providers remain distinct. Existing `hermes-agent` chats keep the default alias until you pick another model. Pick a model for new chats in the backend editor; a started chat can switch from its header picker, from the next message on.
+The bridge uses authenticated session and Runs APIs, including event replay, approvals, clarification and cancellation. Connection testing verifies the required API features from Hermes's `/v1/capabilities` rather than its version, so Hermes 0.22.5 and later work without a bridge update per release (checked against 0.23.4, 2026.9.24); a server missing a required feature returns an upgrade/setup error. Optional features (the provider catalogue, advertised effort levels, approval and question choices) are used when present, and unknown stream events are ignored. The model list combines the compatibility aliases with the full authenticated provider catalogue from `/api/model/options`. Routes appear as `provider/model`; the exact provider and model are forwarded together, so models with the same name on two providers remain distinct. Existing `hermes-agent` chats keep the default alias until you pick another model. Pick a model for new chats in the backend editor; a started chat can switch from its header picker, from the next message on.
 
 Hermes's API does not upload document files. The bridge writes them to a chat-specific directory and gives Hermes absolute paths in its session instructions and prompts. **Hermes's file and terminal tools must see those paths.** A local terminal backend on the same machine works directly. If using containers, mount the workspace root into both services at the same absolute path. An SSH/container tool backend with a different filesystem is not automatically synchronized or remapped.
 
-File transfer and model selection need no Hermes source changes. Hermes 0.22.5's Runs endpoint omits its live reasoning callback even though the agent produces reasoning. For that revision, the included compatibility tool forwards those emitted deltas without changing admission, tools or permissions:
+File transfer and model selection need no Hermes source changes. Hermes's Runs endpoint (0.22.5 through at least 0.23.4) omits its live reasoning callback even though the agent produces reasoning. The optional compatibility tool forwards those emitted deltas without changing admission, tools or permissions. It inspects the code rather than the version: on a Hermes that forwards reasoning itself it reports that and changes nothing:
 
 ```powershell
 python compat/hermes_runs_reasoning.py "$env:HERMES_HOME/hermes-agent/gateway/platforms/api_server_runs.py" --check
@@ -91,7 +91,7 @@ python compat/hermes_runs_reasoning.py "$env:HERMES_HOME/hermes-agent/gateway/pl
 hermes gateway restart
 ```
 
-Run the restart when the gateway is idle. The installer first preserves a timestamped backup, validates the new Python syntax, is safe to rerun, and refuses unknown callback layouts. A Hermes update can replace this fix; recheck afterward. Restore the printed backup if needed, then restart the idle gateway. Only reasoning actually emitted by the selected model is shown; the bridge does not invent or infer thoughts. [Official API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/).
+Run the restart when the gateway is idle. The installer first preserves a timestamped backup, validates the new Python syntax, is safe to rerun, and refuses unknown callback layouts. `hermes update` sets local changes aside and tries to restore them; rerun `--check` afterward. Restore the printed backup if needed, then restart the idle gateway. Only reasoning actually emitted by the selected model is shown; the bridge does not invent or infer thoughts. [Official API documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/).
 
 ### Reasoning effort and usage meters
 
@@ -107,7 +107,7 @@ If a serving API accepts fewer levels than Hermes advertises, set their exact na
 
 Add this property alongside `kind`/`upstreamUrl`, restart the idle bridge, and reopen the chat. The `hermes-agent` default alias inherits the active configured model's levels. An empty array hides the effort control. The bridge rejects unsupported configured levels before submitting a turn. It never retries an agent turn with another effort following a provider error.
 
-Hermes 0.22.5 exposes its native context meter, rolling tokens/second and session cache counters internally, but omits these from Runs. Enable the additional metrics projection:
+Hermes (0.22.5 through at least 0.23.4) computes its native context meter, rolling tokens/second and session cache counters internally, but omits these from Runs. Its per-run `usage` carries only token counts. Enable the optional metrics projection; like the reasoning fix, it leaves a Hermes that publishes these itself unchanged, and the bridge also reads Hermes's own status-bar usage shape should a release add it to Runs:
 
 ```powershell
 python compat/hermes_runs_metrics.py "$env:HERMES_HOME/hermes-agent/gateway/platforms/api_server_runs.py" --check
@@ -121,10 +121,10 @@ The context meter uses the backend's current occupancy and configured context wi
 
 ## DeepSeek Harness setup
 
-This bridge pins the generated client contracts to **0.2.1-rc.5**. Use the matching Harness release:
+The bridge works with Harness **0.2.1-rc.5 and later 0.2 releases**, stable or nightly (verified against 0.2.1-rc.5, 0.2.2-rc.5 and 0.2.3-alpha.2). It ships the 0.2.1-rc.5 client packages; the `/connect` pairing and session protocol they speak is unchanged through 0.2.3. For example, the current stable release:
 
 ```sh
-npx @deepseek-ai/dsh@0.2.1-rc.5 web --no-open
+npx @deepseek-ai/dsh web --no-open
 ```
 
 Configure its model provider through its usual Web UI first. Keep Harness running. Its startup prints an application URL containing `?token=...`; provide the **token value** to the bridge. Change `bridge.config.json` to:
@@ -156,7 +156,7 @@ npm start
 
 The bridge pairs through `/connect`, keeps the returned API cookie on the host, and uses the published Node Connection/Gateway clients and generated session contracts. HTTP and WebSocket requests share that authenticated peer. New chats become Harness sessions with the chat directory as their working directory. Models appear as `provider/model`.
 
-Harness launch tokens change when Harness restarts. Update `HARNESS_LAUNCH_TOKEN` and restart the bridge after restarting Harness. Keep the bridge's state directory and token. Run the bridge in the same environment/filesystem as Harness, such as the same WSL distribution or shared container mount. Different Harness contracts can require a bridge update; failures identify the supported release rather than falling back to a raw model API.
+Harness launch tokens change when Harness restarts. Update `HARNESS_LAUNCH_TOKEN` and restart the bridge after restarting Harness. Keep the bridge's state directory and token. Run the bridge in the same environment/filesystem as Harness, such as the same WSL distribution or shared container mount. A future Harness 0.3 may change these contracts and need a bridge update; failures name the supported range rather than falling back to a raw model API.
 
 No Harness source changes or external bind changes are required. [Official connection documentation](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/connection/README.md).
 
@@ -164,7 +164,7 @@ No Harness source changes or external bind changes are required. [Official conne
 
 #### Using the official desktop app
 
-The official Harness Desktop **0.2.1-rc.5** can serve the same authenticated API. It uses a random loopback port rather than Web's default `3080`.
+The official Harness Desktop **0.2.1-rc.5 and later 0.2 releases**, stable or nightly, can serve the same authenticated API. It uses a random loopback port rather than Web's default `3080`.
 
 **New Desktop installations:** use the standalone MIT-licensed [dsh-clanker-bridge](https://github.com/danielyongzx1/dsh-clanker-bridge). In Harness's **Plugins → Add plugin**, install `github:danielyongzx1/dsh-clanker-bridge`, then fully quit/reopen Desktop if requested. It bundles the bridge and uses Harness's runtime; no Clanker checkout, separate Node installation or copied host token is required. Open `%USERPROFILE%\.dsh\integrations\clanker-bridge\desktop\pairing.html` on the PC for its locally generated bridge token and LAN addresses (`DSH_HOME` or a custom data directory changes that location). Follow its README to pair Clanker. The prebuilt release is also installable directly. The dshmarket catalog submission is prepared separately; publication of this repository does not mean the listing has been accepted.
 
@@ -178,11 +178,11 @@ npm.cmd run desktop:install
 
 The installer uses the running Desktop's own published plugin manager and generated contract. It packages `desktop-plugin`, installs the local bundle with its exact supported runtime range, and preserves the bridge token, identity, saved session mappings and workspace. It never uses a compatibility exemption. If Desktop reports `restart-required`, fully quit through its tray menu and reopen with your normal shortcut once. No console launch is needed afterward.
 
-On each launch, the plugin obtains the current origin and token through Harness's own `webServer` and `connection.authenticatedUrl` services. It writes them atomically to a local discovery file, starts the Node bridge with a hidden console, and restarts its child if it exits. Quit stops its child; closing the window keeps both Desktop and the bridge running. An occupied bridge port is left alone rather than taking over another process.
+On each launch, the plugin obtains the current origin and token through Harness's own `webServer` service and launch-token URL: `connection.authenticatedUrl` up to 0.2.2, the token provider's `webserver/entry-url` contribution from 0.2.3, whichever the running Desktop offers. It writes them atomically to a local discovery file, starts the Node bridge with a hidden console, and restarts its child if it exits. Quit stops its child; closing the window keeps both Desktop and the bridge running. An occupied bridge port is left alone rather than taking over another process.
 
 The bridge binds discovery to the configured Desktop profile identity, so fresh ports and tokens do not retarget an existing chat. It refreshes its authenticated client and model catalogue after a new Desktop generation. Missing discovery reports **Open Harness Desktop**; there is no fallback to stale credentials or a guessed port. The phone keeps the same address (for example port `8788`) and bridge token. The plugin publishes no token to the phone or logs.
 
-Keep the bridge directory, its Node installation and `desktop-plugin/local.config.json` paths available. Moving them requires reinstalling/updating the plugin. Desktop versions other than `0.2.1-rc.5` need a compatible plugin/bridge update. Disable or remove **clanker-harness-desktop-bridge** in Desktop's Plugins page to undo automatic startup. For manual operation afterward, restore the enrollment configuration backup and enter current host credentials. [Plugin installation](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/boot/plugin-manager/README.md).
+Keep the bridge directory, its Node installation and `desktop-plugin/local.config.json` paths available. Moving them requires reinstalling/updating the plugin. Desktop 0.2.1-rc.5 and later 0.2 releases need no update; a 0.3 release will need a compatible plugin/bridge update. Disable or remove **clanker-harness-desktop-bridge** in Desktop's Plugins page to undo automatic startup. For manual operation afterward, restore the enrollment configuration backup and enter current host credentials. [Plugin installation](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/boot/plugin-manager/README.md).
 
 For initial manual pairing, when its tasks are finished, fully quit through the Windows tray's **Quit DeepSeek Harness** command, then launch it from PowerShell to capture its startup URL:
 
@@ -256,7 +256,35 @@ Use HTTPS for internet connections, through your own TLS reverse proxy or privat
 
 ## API and development
 
-Every endpoint requires `Authorization: Bearer <bridge token>`. After pairing, the app also sends `X-Clanker-Bridge` with the saved bridge identity.
+Every endpoint requires a signed request (below). After pairing, `X-Clanker-Bridge` carries the saved bridge identity; a bridge with another identity answers `409`.
+
+### Authentication
+
+The bridge token is an HMAC-SHA256 key shared by the phone and the bridge. **It never travels**, so a stale or impostor address, or anyone watching plain-HTTP LAN traffic, never sees it. Each request carries:
+
+| Header | Value |
+| --- | --- |
+| `X-Clanker-Bridge` | The saved bridge identity, or empty before the first pairing |
+| `X-Clanker-Timestamp` | Milliseconds since the Unix epoch |
+| `X-Clanker-Nonce` | 16 random bytes as lowercase hex, never reused |
+| `X-Clanker-Content-SHA256` | Lowercase hex SHA-256 of the exact body bytes; of the empty string with no body; or `UNSIGNED-PAYLOAD` for a streamed file upload. Missing means the empty-body hash |
+| `X-Clanker-Signature` | `v1=` + hex `HMAC-SHA256(token, message)` |
+
+`message` joins these with `\n`: `clanker-v1`, the method in upper case, the request target exactly as the bridge receives it (the path from `/v1`, with its query string), the timestamp, the nonce, the `X-Clanker-Bridge` value and the body hash. A reverse proxy must forward that path unchanged and keep the `X-Clanker-*` headers.
+
+The bridge compares signatures in constant time and then requires:
+
+- **Time:** within ±5 minutes of its clock. A correctly signed request outside that answers `401` with `code: "clock_skew"` and `X-Clanker-Time: <bridge ms>`; the app keeps the difference as a per-backend clock offset (in memory) and retries once.
+- **Nonce:** unused within the window. The bridge remembers nonces for 5 minutes past their timestamp, up to 50,000 (oldest dropped first). Restarting the bridge forgets them, so a request captured in the 5 minutes before a restart could be replayed once afterward; upload, submission and stop identities still prevent a repeated turn.
+- **Body:** a JSON body must match its signed hash. A file upload may be `UNSIGNED-PAYLOAD` (hashing 20 MB in the app's JavaScript is slow); when it does carry a hash, a mismatched upload is refused before anything is kept.
+
+**The bridge proves itself back.** Its `GET /v1/capabilities` reply to a signed request carries `X-Clanker-Response-Signature: v1=` + hex `HMAC-SHA256(token, "clanker-resp-v1\n" + request nonce + "\n" + bridge identity + "\n" + hex SHA-256 of the response body)`. The app uses an address only once this checks out, so a server that has the public bridge identity (from a QR code or an old address) but not the token can't receive anything. Every bridge response also has `X-Clanker-Auth: v1`; a `401` without it comes from a bridge that predates signing, and the app asks for a bridge update.
+
+**Deprecated:** `Authorization: Bearer <bridge token>` is still accepted so that installed copies of older Clanker versions keep working. It sends the token itself on every request; update the app, and treat a token that has been used this way over plain HTTP on an untrusted network as exposed. Bearer requests get no response signature and no body hash check.
+
+**Compatibility:** an older app works with this bridge (bearer). This version of the app needs this bridge (or a plugin carrying it); with an older bridge, **Test connection** reports that the bridge needs an update. Pairing, the QR code and the token itself are unchanged, so nothing needs re-pairing.
+
+On Windows, the bridge restricts files that hold the token (`pairing.html`, and the Desktop installer's `.env.harness` and `desktop-setup-backup.json`) to the current user with `icacls`, best effort; mode `0600` only applies on POSIX. It warns at startup when the token looks easy to guess.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -267,13 +295,15 @@ Every endpoint requires `Authorization: Bearer <bridge token>`. After pairing, t
 | `GET /v1/sessions/:id/files/:fileId?version=...` | Immutable binary download |
 | `POST /v1/sessions/:id/runs` | Reserve a turn using its persisted submission ID |
 | `GET /v1/runs/:id` | Full snapshot with cursor, content, controls, artifacts and reported metrics |
-| `GET /v1/runs/:id/events` | SSE snapshots of the same run |
+| `GET /v1/runs/:id/events` | SSE snapshots of the same run (at most 4 streams per run and 32 in all; more get `429`) |
 | `POST /v1/runs/:id/stop` | Request upstream cancellation |
 | `POST /v1/sessions/:id/submissions/:submissionId/stop` | Cancel a submission, including one still uploading |
 | `POST /v1/runs/:id/controls` | Answer an exact current approval/clarification |
 | `POST /v1/runs/:id/acknowledge` | Acknowledge an unknown execution after host inspection |
 
-The mobile client polls snapshots every 750 ms while active, replacing content by cursor instead of appending replayed tokens. The host consumes upstream streams. Reopening the chat or foregrounding the app resumes reconciliation; the server continues execution when the phone disconnects.
+The mobile client polls snapshots every 750 ms while active, replacing content by cursor instead of appending replayed tokens; a poll whose cursor hasn't moved changes nothing on the phone. The host consumes upstream streams.
+
+Streamed output is saved at most every 250 ms; submission receipts, uploads, approvals and other controls, and every run state change are written before the bridge answers or moves on. A crash can lose only the last moments of streamed text together with its upstream cursor, so the stream replays them. A finished run drops data only needed while it ran (its prompt and Harness's raw journal). After 30 days a finished run is reduced to a small receipt: retrying its submission still returns the same run without running it again, `GET /v1/runs/:id` answers `410`, and its files move to the session's history so earlier replies' versions stay downloadable. Stored file versions nothing references any more are deleted at startup and daily. Listing a workspace re-reads only files whose size, times or inode changed, copies a version into the store only when it isn't there yet, and skips dependency, VCS and cache folders such as `node_modules`, `.git`, `.venv` and `__pycache__`. If listing fails when a turn ends, the turn keeps its outcome with no file list and a note in its error. Reopening the chat or foregrounding the app resumes reconciliation; the server continues execution when the phone disconnects.
 
 Harness also refreshes its durable follow snapshot every five seconds while a run is active. This recovers a completion or tool event missed by the live stream without repeating the prompt. Bridge state replacement retries transient Windows sharing violations while preserving the previous complete state.
 

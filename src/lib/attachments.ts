@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import type { FilePart, ImagePart } from './providers';
 import { uid } from './storage';
-import type { Workspace } from './workspace';
+import { workspaceFilesChanged, type Workspace } from './workspace';
 
 // Anthropic recommends a long edge of at most 1568px; other providers downscale anyway.
 export const MAX_EDGE = 1568;
@@ -55,6 +55,7 @@ export function saveToWorkspace(ws: Workspace, part: FilePart | ImagePart) {
   } else if (part.file) {
     new File(dir, part.file).copySync(ws.fileAt(path));
   }
+  workspaceFilesChanged();
   return path;
 }
 

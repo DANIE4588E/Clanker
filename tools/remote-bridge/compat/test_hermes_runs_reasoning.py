@@ -3,7 +3,7 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Optional
 import unittest
-from hermes_runs_reasoning import patch_source
+from hermes_runs_reasoning import NativeSupport, patch_source
 
 SOURCE = '''async def _execute_run(self, run):
     def _text_cb(delta):
@@ -41,6 +41,11 @@ class ReasoningForwarding(unittest.TestCase):
         self.assertEqual(patch_source(patched), patched)
         with self.assertRaises(ValueError):
             patch_source(SOURCE.replace('run.admission, stream_delta_callback=_text_cb,', 'unsupported_call(),'))
+
+    def test_a_hermes_that_forwards_reasoning_itself_is_left_alone(self):
+        native = SOURCE.replace('stream_delta_callback=_text_cb,', 'stream_delta_callback=_text_cb, reasoning_callback=_native,')
+        with self.assertRaises(NativeSupport):
+            patch_source(native)
 
 
 if __name__ == '__main__':

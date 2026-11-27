@@ -111,16 +111,31 @@ function closingDollar(text: string, from: number) {
   return -1;
 }
 
+/**
+ * A place in a text, just before a line break, where it can be cut so that what comes before
+ * prepares the same whatever follows: `raw` in the text, `out` in what it prepares to.
+ */
+type Cut = { raw: number; out: number };
+
+/** Where the prose being rewritten starts, in the text and in the output, and the last cut found. */
+type Tracker = { raw: number; out: number; cut: Cut | null };
+
 /** Rewrites the math in a stretch of text outside code fences. */
-function rewriteProse(text: string, live: boolean) {
+function rewriteProse(text: string, live: boolean, track?: Tracker) {
   let out = '';
   let i = 0;
+  // Something opened that doesn't close in the text. Text still to come may close it, past any
+  // line break, so no line break after it is a cut.
+  let open = false;
   while (i < text.length) {
     const c = text[i];
     if (c === '`') {
       // Inline code is copied as is, up to the matching run of backticks.
-      const run = text.slice(i).match(/^`+/)![0];
+      let j = i + 1;
+      while (text[j] === '`') j++;
+      const run = text.slice(i, j);
       const end = text.indexOf(run, i + run.length);
+      if (end < 0) open = true;
       const stop = end < 0 ? i + run.length : end + run.length;
       out += text.slice(i, stop);
       i = stop;
@@ -140,6 +155,7 @@ function rewriteProse(text: string, live: boolean) {
         // Still streaming: a placeholder rather than raw TeX that turns into math a moment later.
         return out + displayBlock('', lineBefore(text, i), PENDING_MATH_LANG);
       }
+      if (end < 0) open = true;
       // Not math after all; copied whole so the second $ doesn't open inline math.
       out += text.slice(i, i + 2);
       i += 2;
@@ -152,6 +168,7 @@ function rewriteProse(text: string, live: boolean) {
         i = end + 2;
         continue;
       }
+      if (end < 0) open = true;
     }
     if (c === '\\') {
       out += text.slice(i, i + 2);
@@ -166,6 +183,7 @@ function rewriteProse(text: string, live: boolean) {
         continue;
       }
     }
+    if (track && c === '\n' && !open) track.cut = { raw: track.raw + i, out: track.out + out.length };
     out += c;
     i++;
   }
@@ -178,28 +196,69 @@ function rewriteProse(text: string, live: boolean) {
  * alone. While `live`, display math that hasn't closed yet becomes a placeholder.
  */
 export function prepareMath(markdown: string, live: boolean) {
-  if (!/\$|\\\(|\\\[/.test(markdown)) return markdown;
+  return prepare(markdown, live).out;
+}
+
+/** prepareMath, with the last cut in the text (see Cut). */
+function prepare(markdown: string, live: boolean): { out: string; cut: Cut | null } {
+  // Text without math prepares to itself (rewriting would only copy it); its cuts aren't looked for.
+  if (!/\$|\\\(|\\\[/.test(markdown)) return { out: markdown, cut: null };
   const lines = markdown.split('\n');
   let out = '';
   let prose: string[] = [];
+  let proseAt = 0;
   let fence: string | null = null;
+  const track: Tracker = { raw: 0, out: 0, cut: null };
   const flush = () => {
-    if (prose.length) out += rewriteProse(prose.join('\n'), live) + '\n';
+    if (prose.length) {
+      track.raw = proseAt;
+      track.out = out.length;
+      out += rewriteProse(prose.join('\n'), live, track) + '\n';
+    }
     prose = [];
   };
-  for (const line of lines) {
+  let at = 0;
+  for (let k = 0; k < lines.length; k++) {
+    const line = lines[k];
     const open = line.match(FENCE)?.[1];
     if (fence) {
       out += line + '\n';
-      if (open && open[0] === fence[0] && open.length >= fence.length && !line.trim().slice(open.length).trim()) fence = null;
+      if (open && open[0] === fence[0] && open.length >= fence.length && !line.trim().slice(open.length).trim()) {
+        fence = null;
+        // Prose can't reach past a fence, so what follows a closed one starts afresh.
+        if (k < lines.length - 1) track.cut = { raw: at + line.length, out: out.length - 1 };
+      }
     } else if (open) {
       flush();
       fence = open;
       out += line + '\n';
     } else {
+      if (!prose.length) proseAt = at;
       prose.push(line);
     }
+    at += line.length + 1;
   }
   flush();
-  return out.slice(0, -1);
+  return { out: out.slice(0, -1), cut: track.cut };
+}
+
+/** A text prepared by prepareMathFrom, to pick up from as it grows. */
+export type PreparedMath = { raw: string; live: boolean; out: string; cut: Cut | null; head: string };
+
+/**
+ * prepareMath(markdown, live), as `out`, for text that streams in. Given what the text so far
+ * prepared to, only the text after its last cut is prepared again: before a cut the output is
+ * final, and after it the text prepares as if it stood alone, so the two join to the same.
+ */
+export function prepareMathFrom(markdown: string, live: boolean, prev: PreparedMath | null): PreparedMath {
+  if (prev && prev.raw === markdown && prev.live === live) return prev;
+  if (prev?.cut && prev.live === live && markdown.startsWith(prev.raw)) {
+    const base = prev.cut;
+    const rest = prepare(markdown.slice(base.raw + 1), live);
+    const out = `${prev.head}\n${rest.out}`;
+    const cut = rest.cut ? { raw: base.raw + 1 + rest.cut.raw, out: base.out + 1 + rest.cut.out } : base;
+    return { raw: markdown, live, out, cut, head: rest.cut ? out.slice(0, cut.out) : prev.head };
+  }
+  const { out, cut } = prepare(markdown, live);
+  return { raw: markdown, live, out, cut, head: cut ? out.slice(0, cut.out) : '' };
 }
