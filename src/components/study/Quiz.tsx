@@ -1,15 +1,21 @@
 import Feather from '@expo/vector-icons/Feather';
 import * as Clipboard from 'expo-clipboard';
-import { memo, useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Haptics from '@/lib/haptics';
+import { gradeQuizAnswer, type QuizGrade } from '@/lib/quizGrading';
 import { useTheme } from '@/lib/theme';
-import { CardTitle, hashKey, IconButton, Pager, parseLoose, PillButton, RichText, str, StudyCard, useFollowUp, useSticky } from './shared';
+import { CardTitle, hashKey, IconButton, Pager, parseLoose, PillButton, RichText, str, StudyCard, useFollowUp, useSticky, useStudyReply } from './shared';
+
+type Question = { question: string; hint?: string } & (
+  | { type: 'multiple-choice'; options: { text: string; explanation?: string }[]; answer: number }
+  | { type: 'open-ended'; referenceAnswer: string }
+);
 
 /** What a ```quiz block holds, normalized from the shapes a model may write. */
 export type QuizSpec = {
   title?: string;
-  questions: { question: string; hint?: string; options: { text: string; explanation?: string }[]; answer: number }[];
+  questions: Question[];
 };
 
 const LETTERS = 'ABCDEFGHIJ';
@@ -31,41 +37,65 @@ export function parseQuiz(json: string): QuizSpec | null {
   const questions: QuizSpec['questions'] = [];
   for (const q of list) {
     const question = str(q?.question ?? q?.q ?? q?.prompt ?? q?.text);
-    const rawOptions = q?.options ?? q?.choices ?? q?.answers;
-    if (!question || !Array.isArray(rawOptions) || rawOptions.length < 2) continue;
-    const options = rawOptions.map((o: any) =>
+    if (!question) continue;
+    const hint = str(q?.hint) || undefined;
+    if (q?.type === 'open-ended') {
+      const referenceAnswer = str(q.referenceAnswer ?? q.correctAnswer ?? q.answer);
+      if (referenceAnswer) questions.push({ type: 'open-ended', question, hint, referenceAnswer });
+      continue;
+    }
+    const choices = q?.options ?? q?.choices ?? q?.answers;
+    if (!Array.isArray(choices) || choices.length < 2) continue;
+    const rawOptions = choices.slice(0, LETTERS.length);
+    const options: { text: string; explanation?: string }[] = rawOptions.map((o) =>
       typeof o === 'object' && o
         ? { text: str(o.text ?? o.label ?? o.option ?? o.answer), explanation: str(o.explanation ?? o.why ?? o.rationale ?? o.feedback) || undefined }
         : { text: str(o) }
     );
-    let answer = rawOptions.findIndex((o: any) => o && typeof o === 'object' && (o.correct === true || o.isCorrect === true || o.correct === 'true'));
-    if (answer < 0) answer = answerIndex(q?.answer ?? q?.correct ?? q?.correctAnswer, options.map((o: { text: string }) => o.text));
-    if (answer < 0 || options.some((o: { text: string }) => !o.text)) continue;
+    let answer = rawOptions.findIndex((o) => o && typeof o === 'object' && (o.correct === true || o.isCorrect === true || o.correct === 'true'));
+    if (answer < 0) answer = answerIndex(q?.answer ?? q?.correct ?? q?.correctAnswer, options.map((o) => o.text));
+    if (answer < 0 || answer >= options.length || options.some((o) => !o.text)) continue;
     // Explanations given apart from the options: one list, or one for the right answer.
-    if (Array.isArray(q?.explanations)) options.forEach((o: any, i: number) => (o.explanation ??= str(q.explanations[i]) || undefined));
+    if (Array.isArray(q?.explanations)) options.forEach((o, i) => (o.explanation ??= str(q.explanations[i]) || undefined));
     if (str(q?.explanation) && !options[answer].explanation) options[answer].explanation = str(q.explanation);
-    questions.push({ question, hint: str(q?.hint) || undefined, options: options.slice(0, LETTERS.length), answer });
+    questions.push({ type: 'multiple-choice', question, hint, options, answer });
   }
   if (!questions.length) return null;
   return { title: str(raw?.title) || undefined, questions };
 }
 
-type QuizState = { index: number; picks: (number | null)[]; hints: boolean[]; done: boolean };
+type WrittenResponse = { answer: string; grade: QuizGrade };
+type QuizResponse = number | WrittenResponse | null;
+type QuizState = { index: number; responses: QuizResponse[]; drafts: string[]; hints: boolean[]; done: boolean };
+
+function isCorrect(question: Question, response: QuizResponse) {
+  if (typeof response === 'number') return question.type === 'multiple-choice' && response === question.answer;
+  return !!response?.grade.correct;
+}
 
 function Results({ quiz, state, restart }: { quiz: QuizSpec; state: QuizState; restart: () => void }) {
   const { colors } = useTheme();
   const followUp = useFollowUp();
-  const right = quiz.questions.filter((q, i) => state.picks[i] === q.answer).length;
   const total = quiz.questions.length;
-  const missed = quiz.questions.flatMap((q, i) => (state.picks[i] !== q.answer ? [{ q, i, pick: state.picks[i] }] : []));
+  const missed = quiz.questions.flatMap((q, i) => {
+    const response = state.responses[i];
+    return isCorrect(q, response) ? [] : [{ q, i, response }];
+  });
+  const right = total - missed.length;
   const name = quiz.title ? `“${quiz.title}”` : 'the quiz';
   const verdict = right === total ? 'Perfect score!' : right / total >= 0.7 ? 'Nice work.' : right / total >= 0.4 ? 'Getting there.' : 'Keep practising.';
 
   const review = () => {
-    const lines = missed.map(
-      ({ q, i, pick }) =>
-        `- Q${i + 1}: ${q.question}\n  My answer: ${pick == null ? '(skipped)' : `${LETTERS[pick]}. ${q.options[pick].text}`}\n  Correct: ${LETTERS[q.answer]}. ${q.options[q.answer].text}`
-    );
+    const lines = missed.flatMap(({ q, i, response }) => {
+      const heading = `- Q${i + 1}: ${q.question}`;
+      if (q.type === 'multiple-choice' && typeof response === 'number') {
+        return [`${heading}\n  My answer: ${LETTERS[response]}. ${q.options[response].text}\n  Correct: ${LETTERS[q.answer]}. ${q.options[q.answer].text}`];
+      }
+      if (typeof response === 'object' && response && !response.grade.correct) {
+        return [`${heading}\n  My answer: ${response.answer}\n  Suggested answer: ${response.grade.suggestedAnswer}`];
+      }
+      return [];
+    });
     followUp?.(`I scored ${right}/${total} on ${name}. Help me understand the ones I got wrong:\n${lines.join('\n')}`);
   };
 
@@ -78,7 +108,7 @@ function Results({ quiz, state, restart }: { quiz: QuizSpec; state: QuizState; r
       <Text style={[styles.verdict, { color: colors.textSecondary }]}>{verdict}</Text>
       <View style={styles.summary}>
         {quiz.questions.map((q, i) => {
-          const ok = state.picks[i] === q.answer;
+          const ok = isCorrect(q, state.responses[i]);
           return (
             <View key={i} style={styles.summaryRow}>
               <Feather name={ok ? 'check-circle' : 'x-circle'} size={18} color={ok ? colors.success : colors.danger} />
@@ -111,44 +141,94 @@ function Results({ quiz, state, restart }: { quiz: QuizSpec; state: QuizState; r
   );
 }
 
-function QuizInner({ source }: { source: string }) {
+function QuizCard({ quiz, progressKey, conversationId }: { quiz: QuizSpec; progressKey: string; conversationId?: string }) {
   const { colors } = useTheme();
-  const quiz = useMemo(() => parseQuiz(source), [source]);
-  const count = quiz?.questions.length ?? 0;
-  const fresh = (): QuizState => ({ index: 0, picks: Array(count).fill(null), hints: Array(count).fill(false), done: false });
-  const [state, setState] = useSticky<QuizState>(hashKey('quiz', source), fresh);
-  if (!quiz) return null;
+  const count = quiz.questions.length;
+  const fresh = (): QuizState => ({
+    index: 0, responses: Array(count).fill(null), drafts: Array(count).fill(''), hints: Array(count).fill(false), done: false,
+  });
+  const [state, setState] = useSticky<QuizState>(progressKey, fresh);
+  const request = useRef<AbortController | null>(null);
+  const [gradingIndex, setGradingIndex] = useState<number | null>(null);
+  const [gradingError, setGradingError] = useState<{ index: number; message: string } | null>(null);
+  useEffect(() => () => {
+    const controller = request.current;
+    request.current = null;
+    controller?.abort();
+  }, []);
 
-  const q = quiz.questions[state.index];
-  const pick = state.picks[state.index];
-  const answered = pick != null;
-  const last = state.index === count - 1;
+  const { index } = state;
+  const q = quiz.questions[index];
+  const response = state.responses[index];
+  const answered = response != null;
+  const draft = state.drafts[index];
+  const firstUnanswered = state.responses.indexOf(null);
+  const complete = firstUnanswered === -1;
+  const last = index === count - 1;
+
+  const record = (answer: NonNullable<QuizResponse>, correct: boolean) => {
+    void Haptics.impactAsync(correct ? Haptics.ImpactFeedbackStyle.Light : Haptics.ImpactFeedbackStyle.Heavy);
+    setState((s) => s.responses[index] != null ? s : {
+      ...s,
+      responses: s.responses.map((r, i) => (i === index ? answer : r)),
+    });
+  };
 
   const choose = (i: number) => {
-    if (answered) return;
-    Haptics.impactAsync(i === q.answer ? Haptics.ImpactFeedbackStyle.Light : Haptics.ImpactFeedbackStyle.Heavy);
-    setState((s) => ({ ...s, picks: s.picks.map((p, j) => (j === s.index ? i : p)) }));
+    if (!answered && q.type === 'multiple-choice') record(i, i === q.answer);
+  };
+  const submit = async () => {
+    const answer = draft.trim();
+    if (answered || !answer || request.current || q.type !== 'open-ended') return;
+    const controller = new AbortController();
+    request.current = controller;
+    setGradingError(null);
+    setGradingIndex(index);
+    Keyboard.dismiss();
+
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    try {
+      const grade = await gradeQuizAnswer(conversationId, q, answer, controller.signal);
+      if (controller.signal.aborted) throw new Error('Grading was cancelled.');
+      if (request.current === controller) record({ answer, grade }, grade.correct);
+    } catch (error) {
+      if (request.current === controller) {
+        const message = controller.signal.aborted
+          ? 'Grading timed out. Try submitting again.'
+          : error instanceof Error ? error.message : 'Couldn’t grade your answer. Try submitting again.';
+        setGradingError({ index, message });
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (request.current === controller) {
+        request.current = null;
+        setGradingIndex(null);
+      }
+    }
   };
   const go = (index: number) => setState((s) => ({ ...s, index, done: false }));
   const copy = () => {
-    const text = [q.question, ...q.options.map((o, i) => `${LETTERS[i]}. ${o.text}`)].join('\n');
+    const text = q.type === 'open-ended'
+      ? q.question
+      : [q.question, ...q.options.map((o, i) => `${LETTERS[i]}. ${o.text}`)].join('\n');
     void Clipboard.setStringAsync(text);
     Haptics.selectionAsync();
   };
 
-  if (state.done) {
+  if (state.done && complete) {
     return (
       <StudyCard>
         {quiz.title && <CardTitle>{quiz.title}</CardTitle>}
-        <Results quiz={quiz} state={state} restart={() => setState(fresh())} />
+        <Results quiz={quiz} state={state} restart={() => { setGradingError(null); setState(fresh()); }} />
       </StudyCard>
     );
   }
 
+  const hintShown = state.hints[index];
   return (
     <StudyCard>
       <Pager
-        index={state.index}
+        index={index}
         count={count}
         noun="question"
         onChange={go}
@@ -157,9 +237,9 @@ function QuizInner({ source }: { source: string }) {
             {q.hint && (
               <IconButton
                 icon="zap"
-                label={state.hints[state.index] ? 'Hide hint' : 'Show hint'}
-                active={state.hints[state.index]}
-                onPress={() => setState((s) => ({ ...s, hints: s.hints.map((h, j) => (j === s.index ? !h : h)) }))}
+                label={hintShown ? 'Hide hint' : 'Show hint'}
+                active={hintShown}
+                onPress={() => setState((s) => ({ ...s, hints: s.hints.map((h, j) => (j === index ? !h : h)) }))}
               />
             )}
             <IconButton icon="copy" label="Copy question" onPress={copy} />
@@ -168,52 +248,104 @@ function QuizInner({ source }: { source: string }) {
       />
       {quiz.title && <CardTitle>{quiz.title}</CardTitle>}
       <RichText style={[styles.question, { color: colors.text }]}>{q.question}</RichText>
-      {q.hint && state.hints[state.index] && (
+      {q.hint && hintShown && (
         <View style={[styles.hint, { backgroundColor: colors.surface }]}>
           <Feather name="zap" size={15} color={colors.accentText} style={styles.hintIcon} />
           <RichText style={[styles.hintText, { color: colors.textSecondary }]}>{q.hint}</RichText>
         </View>
       )}
-      <View style={styles.options}>
-        {q.options.map((o, i) => {
-          const isAnswer = i === q.answer;
-          const picked = i === pick;
-          // Once answered, the right option and a wrong pick stand out, with why; the rest fade.
-          const shown = answered && (isAnswer || picked);
-          const fill = shown ? (isAnswer ? '#16A34A' : '#EF4444') : undefined;
-          return (
-            <Pressable
-              key={i}
-              onPress={() => choose(i)}
-              disabled={answered}
-              accessibilityRole="button"
-              accessibilityLabel={`${LETTERS[i]}: ${o.text}${shown ? (isAnswer ? ', correct' : ', your answer, wrong') : ''}`}
-              style={({ pressed }) => [styles.option, answered && !shown && { opacity: 0.45 }, pressed && { opacity: 0.6 }]}
-            >
-              <View style={[styles.letter, fill ? { backgroundColor: fill, borderColor: fill } : { borderColor: colors.border }]}>
-                <Text style={[styles.letterText, { color: fill ? '#FFFFFF' : colors.textSecondary }]}>{LETTERS[i]}</Text>
-              </View>
-              <View style={styles.optionBody}>
-                <RichText style={[styles.optionText, { color: colors.text }]}>{o.text}</RichText>
-                {shown && !!o.explanation && <RichText style={[styles.explanation, { color: colors.textSecondary }]}>{o.explanation}</RichText>}
-              </View>
-            </Pressable>
-          );
-        })}
-      </View>
+      {q.type === 'multiple-choice' ? (
+        <View style={styles.options}>
+          {q.options.map((o, i) => {
+            const isAnswer = i === q.answer;
+            const picked = i === response;
+            // Once answered, the right option and a wrong pick stand out, with why; the rest fade.
+            const shown = answered && (isAnswer || picked);
+            const fill = shown ? (isAnswer ? '#16A34A' : '#EF4444') : undefined;
+            return (
+              <Pressable
+                key={i}
+                onPress={() => choose(i)}
+                disabled={answered}
+                accessibilityRole="button"
+                accessibilityLabel={`${LETTERS[i]}: ${o.text}${shown ? (isAnswer ? ', correct' : ', your answer, wrong') : ''}`}
+                style={({ pressed }) => [styles.option, answered && !shown && { opacity: 0.45 }, pressed && { opacity: 0.6 }]}
+              >
+                <View style={[styles.letter, fill ? { backgroundColor: fill, borderColor: fill } : { borderColor: colors.border }]}>
+                  <Text style={[styles.letterText, { color: fill ? '#FFFFFF' : colors.textSecondary }]}>{LETTERS[i]}</Text>
+                </View>
+                <View style={styles.optionBody}>
+                  <RichText style={[styles.optionText, { color: colors.text }]}>{o.text}</RichText>
+                  {shown && !!o.explanation && <RichText style={[styles.explanation, { color: colors.textSecondary }]}>{o.explanation}</RichText>}
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : (
+        <View style={styles.written}>
+          {typeof response === 'object' && response ? (
+            <>
+              <Text accessibilityLiveRegion="polite" style={[styles.feedback, { color: response.grade.correct ? colors.success : colors.danger }]}>
+                {response.grade.correct ? 'Correct' : 'Incorrect'}
+              </Text>
+              <Text selectable style={[styles.explanation, { color: colors.text }]}>
+                {response.answer}
+              </Text>
+              {!response.grade.correct && (
+                <View style={styles.suggestion}>
+                  <Text style={[styles.feedback, { color: colors.text }]}>Suggested answer</Text>
+                  <RichText style={[styles.explanation, { color: colors.textSecondary }]}>{response.grade.suggestedAnswer}</RichText>
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <TextInput
+                key={index}
+                accessibilityLabel="Your answer"
+                placeholder="Write your answer"
+                placeholderTextColor={colors.textTertiary}
+                multiline
+                editable={gradingIndex !== index}
+                value={draft}
+                onChangeText={(value) => setState((s) => ({ ...s, drafts: s.drafts.map((d, i) => (i === index ? value : d)) }))}
+                style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              />
+              {gradingError?.index === index && (
+                <Text accessibilityLiveRegion="polite" style={[styles.explanation, { color: colors.danger }]}>{gradingError.message}</Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
       <View style={styles.footer}>
-        {answered && (
+        {!answered && q.type === 'open-ended' && (
           <PillButton
-            title={last ? 'See results' : 'Next'}
-            onPress={() => (last ? setState((s) => ({ ...s, done: true })) : go(state.index + 1))}
+            title={gradingIndex === index ? 'Grading…' : 'Submit'}
+            primary
+            disabled={gradingIndex !== null || !draft.trim()}
+            onPress={() => void submit()}
           />
         )}
-        {!answered && last && state.picks.some((p) => p != null) && (
-          <PillButton title="Finish" onPress={() => setState((s) => ({ ...s, done: true }))} />
+        {complete ? (
+          <PillButton title="See results" onPress={() => setState((s) => ({ ...s, done: true }))} />
+        ) : answered && (
+          <PillButton
+            title={last ? 'Next unanswered' : 'Next'}
+            onPress={() => go(last ? firstUnanswered : index + 1)}
+          />
         )}
       </View>
     </StudyCard>
   );
+}
+
+function QuizInner({ source }: { source: string }) {
+  const quiz = useMemo(() => parseQuiz(source), [source]);
+  const reply = useStudyReply();
+  const key = hashKey(`quiz:${reply?.conversationId ?? ''}:${reply?.messageId ?? ''}`, source);
+  return quiz ? <QuizCard key={key} quiz={quiz} progressKey={key} conversationId={reply?.conversationId} /> : null;
 }
 
 /** An interactive quiz: one question at a time, graded with explanations, then a score to review. */
@@ -231,6 +363,10 @@ const styles = StyleSheet.create({
   optionBody: { flex: 1, paddingTop: 5, gap: 6 },
   optionText: { fontSize: 17, lineHeight: 24 },
   explanation: { fontSize: 15, lineHeight: 22 },
+  written: { marginTop: 18, gap: 8 },
+  input: { borderRadius: 10, borderWidth: 1, minHeight: 92, maxHeight: 200, padding: 12, fontSize: 16, textAlignVertical: 'top' },
+  feedback: { fontSize: 15, fontWeight: '600' },
+  suggestion: { gap: 4, marginTop: 4 },
   footer: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, minHeight: 4 },
   score: { fontSize: 44, fontWeight: '700', marginTop: 4, fontVariant: ['tabular-nums'] },
   verdict: { fontSize: 16, marginTop: 2 },

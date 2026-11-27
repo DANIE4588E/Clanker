@@ -1,3 +1,9 @@
+# Clanker 1.3.0-beta.9
+
+- Study quizzes can include open-ended questions. Tap **Submit** to have the chat’s Clanker model mark a written answer and suggest an answer if it’s incorrect. **See results** appears once every question has been answered and graded.
+
+---
+
 # Clanker 1.3.0-beta.8
 
 ## Reinstall once: a new signing key

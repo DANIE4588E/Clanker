@@ -1,21 +1,24 @@
 import Feather from '@expo/vector-icons/Feather';
-import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { sendMessage } from '@/lib/chat';
 import * as Haptics from '@/lib/haptics';
 import { fonts, useTheme } from '@/lib/theme';
 import { InlineMath } from '../MathView';
 
-/** The chat a reply belongs to, so study cards in it can send the user's results back. */
-const ReplyContext = createContext<string | null>(null);
+/** The reply that owns a study card's progress and follow-ups. */
+const ReplyContext = createContext<{ conversationId: string; messageId: string } | null>(null);
 
-export function ReplyProvider({ conversationId, children }: { conversationId: string; children: ReactNode }) {
-  return <ReplyContext.Provider value={conversationId}>{children}</ReplyContext.Provider>;
+export function ReplyProvider({ conversationId, messageId, children }: { conversationId: string; messageId: string; children: ReactNode }) {
+  const reply = useMemo(() => ({ conversationId, messageId }), [conversationId, messageId]);
+  return <ReplyContext.Provider value={reply}>{children}</ReplyContext.Provider>;
 }
+
+export const useStudyReply = () => useContext(ReplyContext);
 
 /** Sends a message in the reply's chat as the user; null outside a chat (a plan or goal sheet). */
 export function useFollowUp() {
-  const conversationId = useContext(ReplyContext);
+  const conversationId = useStudyReply()?.conversationId;
   const send = useCallback(
     (text: string) => {
       if (!conversationId) return;
@@ -184,22 +187,26 @@ export function PillButton({
   onPress,
   primary,
   icon,
+  disabled,
 }: {
   title: string;
   onPress: () => void;
   primary?: boolean;
   icon?: keyof typeof Feather.glyphMap;
+  disabled?: boolean;
 }) {
   const { colors } = useTheme();
   const fg = primary ? colors.background : colors.text;
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
       style={({ pressed }) => [
         styles.pill,
         primary ? { backgroundColor: colors.text, borderColor: colors.text } : { borderColor: colors.border },
-        pressed && { opacity: 0.6 },
+        (pressed || disabled) && { opacity: 0.6 },
       ]}
     >
       {icon && <Feather name={icon} size={16} color={fg} />}

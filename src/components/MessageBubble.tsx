@@ -853,7 +853,7 @@ function MessageWithCompaction(props: Props) {
   return (
     <>
       {/* Study cards in a reply send the user's results back to its chat. */}
-      <ReplyProvider conversationId={props.conversationId}>
+      <ReplyProvider conversationId={props.conversationId} messageId={props.message.id}>
         <MessageBubbleInner {...props} />
       </ReplyProvider>
       <CompactionMarker conversationId={props.conversationId} messageId={props.message.id} />
