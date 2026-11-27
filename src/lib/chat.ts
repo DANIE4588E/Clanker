@@ -958,7 +958,9 @@ async function runCompletion(
       }
       if (steer()) step = 0;
     }
-    useChats.getState().updateMessage(id, replyId, { status: 'done', error: undefined, interrupted, answerNow: undefined });
+    const chats = useChats.getState();
+    chats.updateMessage(id, replyId, { status: 'done', error: undefined, interrupted, answerNow: undefined });
+    if (!interrupted && !controller.signal.aborted) chats.markReplyUnread(id);
   } catch (e) {
     flush(true);
     markThoughtDone();

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { AppState } from 'react-native';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
@@ -11,6 +12,7 @@ import type { Memory } from './memory';
 import type { SkillRef } from './skills';
 import type { RemoteReply, RemoteSession } from '@/lib/remote/types';
 import { removeRemoteCache } from '@/lib/remote/cache';
+import { useUI } from './ui';
 
 export type MessageStatus = 'streaming' | 'done' | 'error';
 
@@ -125,6 +127,8 @@ export interface Conversation {
   title: string;
   /** True once a model-generated (or user-set) title replaced the placeholder. */
   titled: boolean;
+  /** A reply finished while the chat was out of view. */
+  unread?: true;
   createdAt: number;
   updatedAt: number;
   endpointId: string;
@@ -214,6 +218,8 @@ interface ChatsState {
   setRemote: (id: string, patch: Partial<RemoteSession>) => void;
   remove: (id: string) => void;
   rename: (id: string, title: string, titled?: boolean) => void;
+  markReplyUnread: (id: string) => void;
+  markRead: (id: string) => void;
   setModel: (id: string, endpointId: string, model: string) => void;
   /** Takes effect from the next turn; the bridge checks the model is one it offers. */
   setRemoteModel: (id: string, model: string) => void;
@@ -478,6 +484,15 @@ export const useChats = create<ChatsState>()(
           });
         },
         rename: (id, title, titled = true) => patchConversation(id, () => ({ title, titled })),
+        markReplyUnread: (id) => {
+          const { currentId, visibleChatId } = useUI.getState();
+          if (AppState.currentState === 'active' && id === currentId && id === visibleChatId) return;
+          const c = get().conversations[id];
+          if (c && !c.unread) patchConversation(id, () => ({ unread: true }));
+        },
+        markRead: (id) => {
+          if (get().conversations[id]?.unread) patchConversation(id, () => ({ unread: undefined }));
+        },
         setModel: (id, endpointId, model) => patchConversation(id, (c) =>
           c.backendId && c.backendId !== 'local' ? {} : { endpointId, model }),
         setRemoteModel: (id, model) => patchConversation(id, (c) =>
@@ -750,6 +765,7 @@ export function useChatList(): Record<string, Conversation> {
         c.pinnedAt,
         c.archivedAt,
         c.projectId,
+        c.unread,
         messageCount(c),
         isWorking(c),
       ])

@@ -7,3 +7,4 @@ Add permissions.
 Add general custom instructions.
 Allow community plugins.
 Optimise chat loading.
+Desktop app.

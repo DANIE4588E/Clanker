@@ -146,17 +146,29 @@ export function Sidebar({ navigation }: DrawerContentComponentProps) {
       const c = item.chat;
       const project = c.projectId ? projects[c.projectId] : undefined;
       const working = isWorking(c);
+      const showUnread = !working && c.unread;
       return (
         <Pressable
           onPress={() => select(c.id)}
           onLongPress={(e) => showChatMenu(c, { x: e.nativeEvent.pageX, y: e.nativeEvent.pageY })}
+          accessibilityLabel={showUnread
+            ? [c.title, project?.name, 'Unread reply'].filter(Boolean).join(', ')
+            : undefined}
           style={({ pressed }) => [
             styles.item,
             styles.chatRow,
             (c.id === currentId || pressed) && { backgroundColor: colors.surfaceHover },
           ]}
         >
-          {working && <ActivityIndicator size="small" color={colors.textSecondary} accessibilityLabel="Working" />}
+          {(working || showUnread) && (
+            <View style={styles.chatStatus}>
+              {working ? (
+                <ActivityIndicator size="small" color={colors.textSecondary} accessibilityLabel="Working" />
+              ) : (
+                <View style={[styles.unreadDot, { backgroundColor: colors.accentText }]} />
+              )}
+            </View>
+          )}
           <View style={styles.grow}>
             <Text numberOfLines={1} style={[styles.itemText, { color: colors.text }]}>
               {c.title}
@@ -282,6 +294,8 @@ const styles = StyleSheet.create({
   newChatIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   chatRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chatStatus: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
+  unreadDot: { width: 8, height: 8, borderRadius: 4 },
   section: { fontSize: 13, fontWeight: '600', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 6 },
   item: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 11, borderRadius: 10 },
   itemText: { fontSize: 16 },

@@ -132,6 +132,7 @@ export async function resumeRemoteChat(id: string) {
         if (remoteTerminal(snapshot.state)) {
           completed = snapshot.state === 'completed';
           cancelled = snapshot.state === 'cancelled';
+          if (completed) useChats.getState().markReplyUnread(id);
           useChats.getState().setRemote(id, { submissionId: undefined, submissionEffort: undefined, submissionModel: undefined, runId: undefined, replyId: undefined, userMessageId: undefined, stopRequested: false });
           flushJsonStorage();
           void notifyReplyFinished(id, initial.remote.replyId);

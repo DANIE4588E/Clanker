@@ -13,6 +13,8 @@ Supported API formats:
 
 Features: streaming replies with stop/regenerate, markdown with syntax-highlighted code blocks, image attachments for vision models, chat history drawer with search/rename/delete, model picker across all endpoints, auto-generated titles, light/dark/system theme. API keys live in the device keychain (`expo-secure-store`); chats and images are stored as files in the app's document directory.
 
+A blue dot to the left of a chat title in the sidebar means a reply finished while you were away from that chat. It appears in the same spot as the spinner and clears when you view the chat again.
+
 ## Remote agent backends
 
 **Settings → Backends** adds named **Hermes Agent** and **DeepSeek Harness** connections alongside Clanker's built-in agent. Choose the backend on an empty chat before the first message; existing chats keep their backend and remote model. Each remote chat creates and resumes its own session rather than attaching to sessions created in another application.

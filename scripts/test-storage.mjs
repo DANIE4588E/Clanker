@@ -246,11 +246,12 @@ function launch(base) {
   const files = fileSystem(base);
   const cache = new Map();
   const { File } = files.module;
+  const appState = { currentState: 'active', addEventListener: () => {} };
   const stubs = {
     'expo-file-system': files.module,
     'expo-secure-store': {},
     'expo-sharing': {},
-    'react-native': { AppState: { addEventListener: () => {} }, Platform: { OS: 'android' } },
+    'react-native': { AppState: appState, Platform: { OS: 'android' } },
     '@/lib/attachments': { deleteAttachment() {}, attachmentUri: (name) => path.join(base, 'attachments', name) },
     '@/lib/workspace': {
       chatWorkspace: () => ({ remove() {} }),
@@ -270,7 +271,7 @@ function launch(base) {
     '@/store/backends': {},
     '@/store/settings': {},
   };
-  const real = ['@/lib/storage', '@/lib/chatIndex', '@/store/chats', '@/lib/library', '@/lib/activity'];
+  const real = ['@/lib/storage', '@/lib/chatIndex', '@/store/chats', '@/store/ui', '@/lib/library', '@/lib/activity'];
   const load = (spec) => {
     if (cache.has(spec)) return cache.get(spec);
     const file = path.join(root, spec.replace(/^@\//, 'src/') + '.ts');
@@ -295,6 +296,7 @@ function launch(base) {
   const data = path.join(base, 'data');
   return {
     base,
+    appState,
     load,
     storage,
     chats,
@@ -367,6 +369,40 @@ test('saving never writes a chat that was not loaded', (t) => {
   const again = launch(base);
   assert.equal(again.state().conversations[a].messages.length, 3);
   assert.equal(again.state().conversations[b].messages.length, 2);
+});
+
+test('a reply is unread when its chat is out of view, until marked read', (t) => {
+  const { base, a, b } = twoChats(t);
+  const app = launch(base);
+  const { useUI } = app.load('@/store/ui');
+  useUI.setState({ currentId: a, visibleChatId: a });
+  app.state().markReplyUnread(a);
+  assert.equal(app.state().conversations[a].unread, undefined);
+  app.state().markReplyUnread(b);
+  assert.equal(app.state().conversations[b].unread, true);
+
+  useUI.setState({ visibleChatId: null });
+  app.state().markReplyUnread(a);
+  assert.equal(app.state().conversations[a].unread, true);
+  app.state().markRead(a);
+
+  useUI.setState({ visibleChatId: a });
+  app.appState.currentState = 'background';
+  app.state().markReplyUnread(a);
+  app.flush();
+
+  const reopened = launch(base);
+  assert.equal(reopened.state().conversations[a].unread, true);
+  assert.equal(reopened.state().conversations[b].unread, true);
+  reopened.state().markRead(b);
+  assert.equal(reopened.state().conversations[b].unread, undefined);
+  reopened.flush();
+  assert.deepEqual(reopened.reads, ['data/chats.meta.json']);
+  assert.deepEqual(reopened.writes, ['data/chats.meta.json']);
+
+  const again = launch(base);
+  assert.equal(again.state().conversations[a].unread, true);
+  assert.equal(again.state().conversations[b].unread, undefined);
 });
 
 test('renaming, pinning and archiving a chat not loaded changes only the chat list', (t) => {

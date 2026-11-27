@@ -20,6 +20,7 @@ function app({ snapshot } = {}) {
   Object.assign(storage, { splitJsonFileStorage: () => storage.jsonFileStorage, isStub: () => false, stubSummary: () => undefined, stubLoaded: () => true, loadStub() {}, restub: (entry, patch) => ({ ...entry, ...patch }) });
   const ui = { currentId: null, newChatMemoryOff: false, newChatProjectId: null };
   const mocks = {
+    'react-native': { AppState: { currentState: 'active' } },
     '@/lib/storage': storage,
     '@/lib/attachments': { deleteAttachment() {} },
     '@/lib/remote/cache': { removeRemoteCache() {} },
@@ -45,6 +46,7 @@ function app({ snapshot } = {}) {
     const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
     const module = { exports: {} }; loaded.set(normalized, module.exports);
     const localRequire = (specifier) => {
+      if (mocks[specifier]) return mocks[specifier];
       if (!specifier.startsWith('.') && !specifier.startsWith('@/')) return require(specifier);
       const resolved = specifier.startsWith('.') ? path.posix.normalize(path.posix.join(path.posix.dirname(normalized), specifier)).replace(/^src\//, '@/') : specifier;
       if (mocks[resolved]) return mocks[resolved];
@@ -125,9 +127,11 @@ test('reported remote context and reply statistics persist through chat reopenin
   await new Promise((resolve) => setImmediate(resolve));
   const saved = f.chats.getState().conversations[id];
   assert.equal(saved.remote.submissionId, undefined);
+  assert.equal(saved.unread, true);
   assert.deepEqual(saved.remote.context, metrics.context);
   assert.deepEqual(saved.messages.at(-1).stats, { tokensPerSec: 42.5, cacheHit: 0 });
   const restored = f.chats.persist.getOptions().merge({ conversations: { [id]: structuredClone(saved) } }, f.chats.getState());
+  assert.equal(restored.conversations[id].unread, true);
   assert.deepEqual(restored.conversations[id].remote.context, metrics.context);
   assert.deepEqual(restored.conversations[id].messages.at(-1).stats, saved.messages.at(-1).stats);
 });

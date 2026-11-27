@@ -21,6 +21,8 @@ type ChatView = {
 };
 
 interface UIState extends ChatView {
+  /** Chat in the focused screen, with the sidebar closed. */
+  visibleChatId: string | null;
   /** Effort slider panel is up; the drawer swipe is disabled while it is. */
   effortOpen: boolean;
   /**
@@ -57,6 +59,7 @@ const viewOf = ({ currentId, newChatMemoryOff, newChatProjectId }: ChatView): Ch
 
 export const useUI = create<UIState>()((set, get) => ({
   currentId: null,
+  visibleChatId: null,
   effortOpen: false,
   webTouch: false,
   setWebTouch: (webTouch) => set({ webTouch }),

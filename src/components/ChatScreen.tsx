@@ -48,12 +48,26 @@ export function reportSendError(e: unknown) {
  * and opens it from the header; a project's chat is pushed over the project page and goes back
  * to it instead.
  */
-export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: () => void }) {
+export function ChatScreen({ onMenu, onBack, sidebarOpen }: { onMenu?: () => void; onBack?: () => void; sidebarOpen?: boolean }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
 
   const currentId = useUI((s) => s.currentId);
   const open = useUI((s) => s.open);
+  useFocusEffect(useCallback(() => {
+    if (!currentId || sidebarOpen || useUI.getState().currentId !== currentId) return;
+    useUI.setState({ visibleChatId: currentId });
+    if (AppState.currentState === 'active') useChats.getState().markRead(currentId);
+    const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && useUI.getState().currentId === currentId) {
+        useChats.getState().markRead(currentId);
+      }
+    });
+    return () => {
+      listener.remove();
+      useUI.setState({ visibleChatId: null });
+    };
+  }, [currentId, sidebarOpen]));
   // Only what this screen shows itself. MessageList reads the messages, so a streaming reply
   // re-renders the list rather than the header and composer with every token.
   const conversation = useChats(
