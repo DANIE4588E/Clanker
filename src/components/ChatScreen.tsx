@@ -126,12 +126,13 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
   const [headerHeight, setHeaderHeight] = useState(insets.top + 60 + HEADER_FADE);
   const [composerBase, setComposerBase] = useState(0);
   const composerProgress = useSharedValue(0);
+  const composerSlide = useSharedValue(0);
   const topInset = headerHeight - HEADER_FADE;
-  // Finding in the chat hides the composer, so the conversation runs down to the screen's bottom.
-  const bottomInset = useDerivedValue(
-    () => (finding ? insets.bottom : Math.max(composerBase + composerGrowth(composerProgress.value) - COMPOSER_FADE, 0)),
-    [finding, composerBase, insets.bottom]
-  );
+  // Let the conversation use the space the composer gives up as it slides away.
+  const bottomInset = useDerivedValue(() => {
+    const dockInset = Math.max(composerBase + composerGrowth(composerProgress.value) - COMPOSER_FADE, 0);
+    return Math.max(dockInset * (1 - composerSlide.value), finding ? insets.bottom : 0);
+  });
   const emptyInsetStyle = useAnimatedStyle(() => ({ paddingBottom: bottomInset.value }));
 
   const streaming = !!conversation?.streaming || !!conversation?.pendingRemote;
@@ -375,13 +376,13 @@ export function ChatScreen({ onMenu, onBack }: { onMenu?: () => void; onBack?: (
             onContinue={canContinue ? onContinue : undefined}
             usage={usage}
             progress={composerProgress}
+            slideProgress={composerSlide}
             onBaseHeight={setComposerBase}
             attachments={attachments}
             onChangeAttachments={setAttachments}
             editing={!!editing && editing.chatId === currentId}
             onCancelEdit={() => endEdit(false)}
-            // A text dialog (naming a new project, say) raises the keyboard, which would lift the
-            // box above the dialog's backdrop.
+            // Text dialogs and Find take over before their input gets the keyboard.
             hidden={finding || promptOpen}
             focusKey={composerFocus}
           />

@@ -35,9 +35,8 @@ import { useChats } from '@/store/chats';
 import type { SubscriptionQuota } from '@/lib/useSubscriptionQuota';
 
 // The composer is a one-line pill while the keyboard is down and a two-row box (text above,
-// toolbar below) while the keyboard is up. One progress value drives every dimension between
-// the two. Expansion follows the keyboard, not input focus, so blurring the TextInput (tapping
-// a toolbar button, switching focus) never shrinks the box while the keyboard is still showing.
+// toolbar below) while the keyboard is available to it. One progress value drives every dimension
+// between the two. A toolbar button can briefly blur the input while keeping the box expanded.
 const ROW = 52;
 const BUTTON = 36;
 const TOOLBAR_PAD = 8;
@@ -92,8 +91,10 @@ type Props = {
   onStop: () => void;
   /** When set and the box is empty, replaces Send with a Continue button to resume the interrupted turn. */
   onContinue?: () => void;
-  /** Keeps the box expanded for exactly as long as the keyboard is on screen. */
+  /** Keeps the box expanded while the keyboard is available to it. */
   keyboardVisible: boolean;
+  /** The dock is out of view, so its overlays should be closed too. */
+  hidden: boolean;
   /** Shown when the selected model takes an effort level. */
   effort?: { levels: string[]; level: string; onPress: () => void };
   /** Shown beside the effort gauge while expanded, when context usage is turned on. */
@@ -123,6 +124,7 @@ export function Composer({
   onStop,
   onContinue,
   keyboardVisible,
+  hidden,
   effort,
   context,
   quota,
@@ -160,9 +162,7 @@ export function Composer({
   const collapsedPadRight =
     COLLAPSED.padRight + (effort ? BUTTON + TOOLBAR_GAP : 0) + (bothButtons ? BUTTON + TOOLBAR_GAP : 0);
 
-  // Expand for exactly as long as the keyboard is on screen. Driving this from the keyboard
-  // rather than focus means tapping a toolbar button (which blurs the TextInput) keeps the box
-  // big until the keyboard itself goes away.
+  // Keep the toolbar expanded during brief focus changes, such as tapping a toolbar button.
   useEffect(() => {
     progress.set(withTiming(keyboardVisible ? 1 : 0, TWEEN));
   }, [keyboardVisible, progress]);
@@ -226,13 +226,17 @@ export function Composer({
   useEffect(() => {
     if (!popover) return;
     const close = () => setPopover(null);
+    if (hidden) {
+      close();
+      return;
+    }
     const kb = Keyboard.addListener('keyboardDidHide', close);
     const dim = Dimensions.addEventListener('change', close);
     return () => {
       kb.remove();
       dim.remove();
     };
-  }, [popover]);
+  }, [hidden, popover]);
 
   // Popovers float above the box, anchored where it measures to sit in the root overlay host.
   // Keeping them in the main Activity window (instead of Modal or OverKeyboardView) leaves the
@@ -396,7 +400,7 @@ export function Composer({
   return (
     <>
       <AttachmentMenu
-        visible={popover === 'attach'}
+        visible={!hidden && popover === 'attach'}
         x={anchor.x}
         bottom={anchor.bottom}
         onPick={attach}
@@ -404,7 +408,7 @@ export function Composer({
         slash={!remote}
       />
       <MentionMenu
-        visible={mentionOpen}
+        visible={!hidden && mentionOpen}
         sections={sections}
         query={browsing ? '' : (trigger?.query ?? '')}
         left={anchor.left}
@@ -417,7 +421,7 @@ export function Composer({
       />
       {context && (
         <ContextPopover
-          visible={popover === 'context'}
+          visible={!hidden && popover === 'context'}
           usage={context}
           right={anchor.right}
           bottom={anchor.bottom}
@@ -427,7 +431,7 @@ export function Composer({
       )}
       {quota && (
         <QuotaPopover
-          visible={popover === 'quota'}
+          visible={!hidden && popover === 'quota'}
           quota={quota}
           left={anchor.x - TOOLBAR_PAD}
           bottom={anchor.bottom}

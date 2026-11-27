@@ -1,10 +1,10 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useIsFocused } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Keyboard, Pressable, StyleSheet, Text, View, type TextInputInstance } from 'react-native';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Alert, findNodeHandle, Keyboard, Pressable, StyleSheet, Text, View, type TextInputInstance } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { OverKeyboardView } from 'react-native-keyboard-controller';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
+import { OverKeyboardView, useGenericKeyboardHandler, useReanimatedFocusedInput } from 'react-native-keyboard-controller';
+import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 import { useShallow } from 'zustand/react/shallow';
@@ -33,12 +33,13 @@ const VEIL_FADE = 120;
 // veil below the panel would otherwise paint across the glow's lower half.
 const GLOW_ROOM = 28;
 const EFFORT_FADE = { duration: 160 };
+const DOCK_SLIDE = { duration: 180, easing: Easing.out(Easing.cubic) };
 /** How far the composer's fade reaches past it into the content above. */
 export const COMPOSER_FADE = 28;
 
 // Keeps the keyboard height so the over-keyboard effort panel can sit just above it.
 function useKeyboard() {
-  const [state, setState] = useState({ visible: false, height: 0 });
+  const [state, setState] = useState(() => ({ visible: Keyboard.isVisible(), height: Keyboard.metrics()?.height ?? 0 }));
   useEffect(() => {
     const show = (height: number) => setState({ visible: true, height });
     const showWill = Keyboard.addListener('keyboardWillShow', (e) => show(e.endCoordinates.height));
@@ -67,6 +68,8 @@ type Props = {
   usage: ContextUsage | null;
   /** The composer's expansion; the screen reads it to keep content clear of the growing box. */
   progress: SharedValue<number>;
+  /** The screen reads the dock's slide to give its space back to the chat. */
+  slideProgress?: SharedValue<number>;
   /** The dock's height with the composer collapsed, its fade included, whenever it settles. */
   onBaseHeight: (height: number) => void;
   /** The attachments in the box, when the screen keeps them; otherwise the dock does. */
@@ -75,7 +78,7 @@ type Props = {
   /** The box holds an edit of an earlier message; sending sends the edit. */
   editing?: boolean;
   onCancelEdit?: () => void;
-  /** Takes the box off the screen (finding in the chat, a dialog asking for text) and keeps what it holds. */
+  /** Slides the box off screen for Find in Chat or a text prompt and keeps what it holds. */
   hidden?: boolean;
   /** A new value focuses the box (a chat just started by pulling up the last one). */
   focusKey?: number;
@@ -97,6 +100,7 @@ export function ComposerDock({
   onContinue,
   usage,
   progress,
+  slideProgress,
   onBaseHeight,
   attachments: controlledAttachments,
   onChangeAttachments,
@@ -149,6 +153,69 @@ export function ComposerDock({
   const showEffort = focused && effortOpen && !!effort;
   const keyboard = useKeyboard();
   const keyboardVisible = keyboard.visible;
+  const { input: focusedInput } = useReanimatedFocusedInput();
+  const keyboardHeight = useSharedValue(keyboard.height);
+  const keyboardActive = useSharedValue(keyboardVisible);
+  const inputTag = useSharedValue<number | null>(null);
+  const dockHeight = useSharedValue(0);
+  const ownSlide = useSharedValue(0);
+  const slide = slideProgress ?? ownSlide;
+  const keyboardTakenOnUI = useSharedValue(false);
+  const [keyboardTaken, setKeyboardTaken] = useState(false);
+  const dockHidden = hidden || keyboardTaken;
+
+  useLayoutEffect(() => {
+    inputTag.set(findNodeHandle(input.current) ?? null);
+  }, [inputTag]);
+
+  useGenericKeyboardHandler({
+    onStart: (e) => {
+      'worklet';
+      if (e.height > 0) keyboardActive.set(true);
+    },
+    onMove: (e) => {
+      'worklet';
+      keyboardHeight.set(e.height);
+    },
+    onInteractive: (e) => {
+      'worklet';
+      keyboardHeight.set(e.height);
+    },
+    onEnd: (e) => {
+      'worklet';
+      keyboardHeight.set(e.height);
+      keyboardActive.set(e.height > 0);
+    },
+  }, []);
+
+  useAnimatedReaction(
+    () => {
+      if (!focused || !keyboardActive.get()) return false;
+      const tag = focusedInput.get()?.target;
+      const composerTag = inputTag.get();
+      // Keep the last owner across a brief gap in focus, including during dismissal.
+      if (tag == null || composerTag == null) return null;
+      return tag !== composerTag;
+    },
+    (taken) => {
+      if (taken == null || taken === keyboardTakenOnUI.get()) return;
+      keyboardTakenOnUI.set(taken);
+      scheduleOnRN(setKeyboardTaken, taken);
+    },
+  );
+
+  // Find and text prompts request the slide before their input takes focus.
+  useAnimatedReaction(
+    () => hidden || keyboardTakenOnUI.get(),
+    (offscreen, previous) => {
+      if (offscreen !== previous) slide.set(withTiming(offscreen ? 1 : 0, DOCK_SLIDE));
+    },
+  );
+
+  // The parent pads for the keyboard. Travel past that padding and the dock's full height.
+  const dockStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: slide.get() * (dockHeight.get() + keyboardHeight.get()) }],
+  }));
 
   // The slider lives in an over-keyboard layer (its own window on top of the IME), so the
   // keyboard stays up underneath it, the veil paints across it, and every touch hits the
@@ -236,16 +303,19 @@ export function ComposerDock({
     <>
       {/* Floats over the bottom of the content; what scrolls under it fades out into the
           background instead of being cut off at a hard edge. */}
-      <View
-        pointerEvents={hidden ? 'none' : 'box-none'}
+      <Animated.View
+        pointerEvents={dockHidden ? 'none' : 'box-none'}
+        accessibilityElementsHidden={dockHidden}
+        importantForAccessibility={dockHidden ? 'no-hide-descendants' : 'auto'}
         onLayout={(e) => {
-          if (hidden) return;
+          const { height } = e.nativeEvent.layout;
+          dockHeight.set(height);
           // Mid-animation sizes race the UI thread; the layout after it settles is exact.
           const p = progress.get();
           if (p > 0 && p < 1) return;
-          onBaseHeight(Math.round(e.nativeEvent.layout.height - composerGrowth(p)));
+          onBaseHeight(Math.round(height - composerGrowth(p)));
         }}
-        style={[styles.area, { paddingBottom: bottomPad }, hidden && styles.hidden]}
+        style={[styles.area, { paddingBottom: bottomPad }, dockStyle]}
       >
         <EdgeFade solid="bottom" style={StyleSheet.absoluteFill} />
         {/* Faded out rather than unmounted while the slider is up, so attached images survive,
@@ -287,7 +357,8 @@ export function ComposerDock({
             onSend={onSend}
             onStop={onStop}
             onContinue={onContinue}
-            keyboardVisible={keyboardVisible}
+            keyboardVisible={keyboardVisible && !dockHidden}
+            hidden={dockHidden}
             effort={effort ? { ...effort, onPress: () => setEffortOpen(true) } : undefined}
             context={usage}
             quota={quota}
@@ -296,7 +367,7 @@ export function ComposerDock({
             remote={remote}
           />
         </Animated.View>
-      </View>
+      </Animated.View>
 
       {/* The layer floats above the keyboard window, so the keyboard keeps showing under the
           veil and stays untouched: every tap lands on this layer's scrim. */}
@@ -342,7 +413,6 @@ export function ComposerDock({
 }
 
 const styles = StyleSheet.create({
-  hidden: { display: 'none' },
   area: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: COMPOSER_FADE },
   // The overlay host is stretched to the full screen by its native side; children fill it.
   overlay: { flex: 1 },
