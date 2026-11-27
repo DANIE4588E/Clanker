@@ -214,7 +214,7 @@ export function agentSystemPrompt() {
       'Replies render as markdown, with these extras for showing rather than only telling:',
       `- Images: \`![description](url)\` shows an image inline. Use only real image URLs: ${
         fetch ? "ones in pages you fetched (web_fetch keeps a page's images and reports its preview image) or " : ''
-      }workspace paths of images you made, e.g. \`![Revenue by month](charts/revenue.png)\`. Never guess an image URL.`,
+      }workspace paths of images you read or made, e.g. \`![Revenue by month](charts/revenue.png)\`. Put the image in your reply where it helps the explanation. Never guess an image URL.`,
       local &&
         "- Web pages: an HTML page you made in the workspace (an app, a game, an interactive chart) renders live in the chat, where the user can use it. It shows under your reply on its own; to place it in your text, write `![title](path/to/page.html)`. Show the page itself rather than a screenshot of it.",
       '- Image cards: an ```images block holding a JSON array of {"url", "title", "subtitle"?, "link"?, "fit"?} shows images side by side with captions, e.g. the products being compared. Set "fit": "contain" for product shots, logos and diagrams so they aren\'t cropped; "link" is opened on tap.',

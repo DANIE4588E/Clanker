@@ -175,7 +175,7 @@ export function FileChips({ files }: { files: string[] }) {
   );
 }
 
-function ToolCallInner({ part }: { part: ToolPart }) {
+function ToolCallInner({ part, showImages = true }: { part: ToolPart; showImages?: boolean }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const job = part.background;
@@ -244,7 +244,7 @@ function ToolCallInner({ part }: { part: ToolPart }) {
         </SelectionArea>
       )}
 
-      {!!part.images?.length && (
+      {showImages && !!part.images?.length && (
         <View style={styles.chips}>
           {part.images.map((img) => (
             <Image

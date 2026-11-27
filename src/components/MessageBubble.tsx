@@ -4,7 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Fragment, memo, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useShallow } from 'zustand/react/shallow';
 import { attachmentUri } from '@/lib/attachments';
@@ -16,6 +16,7 @@ import { sitesOf, sourcesOf, type Site } from '@/lib/sources';
 import { formatStats } from '@/lib/stats';
 import { useTheme } from '@/lib/theme';
 import { useActivityLabel } from '@/lib/local/useActivityLabel';
+import { useWorkspace } from '@/lib/useWorkspace';
 import { messageText, useChats, type Message } from '@/store/chats';
 import { LOCAL_ENDPOINT_ID } from '@/store/localModels';
 import { describeCall } from '@/lib/tools/describe';
@@ -27,7 +28,8 @@ import { useFindMarker } from './FindHighlight';
 import { brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { RemoteReply } from './RemoteReply';
 import { areasSelect, SelectionArea } from './SelectionArea';
-import { Markdown } from './Markdown';
+import { ChatImage } from './ImageCards';
+import { Markdown, markdownImageSources } from './Markdown';
 import { ReplyProvider } from './study/shared';
 import { NestedScroll } from './NestedScroll';
 import { PlanCard } from './PlanCard';
@@ -235,47 +237,56 @@ function streamedSites(content: ContentPart[]): { sites: Site[]; searched: boole
   return { sites: [...fold.sites.values()], searched: fold.searched };
 }
 
-/** The length `texts` joined and trimmed would have, without joining them. */
-function trimmedLength(texts: { text: string }[]) {
-  let total = 0;
-  for (const t of texts) total += t.text.length;
-  // \s matches what trim() removes.
-  let lead = 0;
-  lead: for (const { text } of texts) {
-    for (let i = 0; i < text.length; i++) {
-      if (!/\s/.test(text[i])) break lead;
-      lead++;
-    }
-  }
-  if (lead === total) return 0;
-  let trail = 0;
-  trail: for (let k = texts.length - 1; k >= 0; k--) {
-    const { text } = texts[k];
-    for (let i = text.length - 1; i >= 0; i--) {
-      if (!/\s/.test(text[i])) break trail;
-      trail++;
-    }
-  }
-  return total - lead - trail;
-}
-
-// While a reply streams, text after its last tool call may be the answer or a note before the next
-// call; there is no telling until the response ends. Notes are a sentence or two, so the work folds
-// away once the text runs past this, and otherwise when the reply finishes.
+// While a reply streams, the text after its last step could be another progress note. Use its
+// length to decide when to stop showing the working timer, independent of which text is visible.
 const ANSWER_CHARS = 240;
 
-/**
- * Splits a reply that used tools into the work (thoughts, tool calls and notes, up to the last
- * thought or call) and the answer after it. Replies without tool calls aren't split, unless
- * `thoughts` says a reply that only thought counts as work too.
- */
+/** Finds the work boundary for replies with tool calls, or with thoughts in compact and normal mode. */
 function splitWork(segments: Segment[], thoughts: boolean) {
   const end = segments.findLastIndex((s) => s.kind !== 'text');
-  const work = segments.slice(0, end + 1);
-  if (!work.some((s) => s.kind === 'tool' || (thoughts && s.kind === 'thought'))) return null;
-  const answer = segments.slice(end + 1) as Extract<Segment, { kind: 'text' }>[];
-  // How long the answer is, trimmed; joining it all on every streamed token only to measure it cost as much as the text.
-  return { work, answer, chars: trimmedLength(answer), at: answer[0]?.at };
+  if (end < 0 || (!thoughts && !segments.some((s) => s.kind === 'tool'))) return null;
+  const answer = segments[end + 1];
+  return answer?.kind === 'text' ? { end, chars: answer.text.trim().length, at: answer.at } : { end, chars: 0 };
+}
+
+function isImageRead(part: ContentPart): part is ToolPart & { input: { path: string }; images: ImagePart[] } {
+  return part.type === 'tool' && part.name === 'read_file' && part.status === 'done' &&
+    typeof part.input.path === 'string' && !!part.images?.length;
+}
+
+/** Images read from the workspace can illustrate the reply at the point where they were read. */
+function imageReads(content: ContentPart[], segments: Segment[], ws: ReturnType<typeof useWorkspace>) {
+  const reads = content.filter(isImageRead);
+  const previews = new Map<ToolPart, string>();
+  if (!reads.length) return previews;
+
+  const seen = new Set<string>();
+  if (ws) {
+    for (const seg of segments) {
+      if (seg.kind !== 'text') continue;
+      for (const src of markdownImageSources(seg.text)) {
+        if (/^[a-z][a-z0-9+.-]*:/i.test(src)) continue;
+        try {
+          const path = ws.normalizePath(src);
+          // If the original was moved or deleted, the stored preview can still be shown.
+          if (path && ws.fileAt(path).exists) seen.add(path);
+        } catch {
+          // An invalid image destination does not replace a tool preview.
+        }
+      }
+    }
+  }
+  for (const part of reads) {
+    let path = part.input.path;
+    try {
+      path = ws?.normalizePath(path) ?? path;
+    } catch {
+      // The stored preview is still usable if the original path cannot be resolved.
+    }
+    if (!seen.has(path)) previews.set(part, path);
+    seen.add(path);
+  }
+  return previews;
 }
 
 function duration(ms: number) {
@@ -344,23 +355,15 @@ function CurrentStep({ seg, onPress }: { seg: Segment | null; onPress: () => voi
   );
 }
 
-/**
- * The work behind an answer under a "Working for Ns" header that becomes "Worked for Ns" once the
- * answer comes. Folded while under way, it still shows the model's notes, then `step` (the current
- * step) in place of the thoughts and calls.
- */
-function Work({
-  segments,
+/** The toggle for the tool calls and thoughts shown in the reply. */
+function WorkHeader({
   open,
   onToggle,
   working,
   since,
   ms,
-  step,
-  render,
   content,
 }: {
-  segments: Segment[];
   open: boolean;
   onToggle: () => void;
   /** Whether the work is still under way: the reply streams and no answer has come yet. */
@@ -369,8 +372,6 @@ function Work({
   since: number;
   /** How long the work took, once done. */
   ms: number;
-  step: ReactNode;
-  render: (seg: Segment, i: number) => ReactNode;
   content: ContentPart[];
 }) {
   const { colors } = useTheme();
@@ -388,6 +389,7 @@ function Work({
         hitSlop={8}
         accessibilityRole="button"
         accessibilityLabel={`${label}, ${open ? 'hide' : 'show'} steps`}
+        accessibilityState={{ expanded: open }}
         style={({ pressed }) => [styles.workHeader, pressed && { opacity: 0.6 }]}
       >
         <Text style={[styles.workLabel, { color: colors.textSecondary }]}>{label}</Text>
@@ -398,19 +400,7 @@ function Work({
           style={{ transform: [{ rotate: open ? '180deg' : '0deg' }] }}
         />
       </Pressable>
-      {/* Under the header rather than after the steps: a note the model writes before its next
-          call shows after the steps and joins them when the call lands, which would push the
-          sites down on every round. */}
       <SiteChips sites={sites} searched={searched} />
-      {open ? (
-        segments.map(render)
-      ) : (
-        <>
-          {/* Folded while under way, the model's notes between steps still show; only thoughts and calls fold. */}
-          {working && segments.map((seg, i) => seg.kind === 'text' && render(seg, i))}
-          {step}
-        </>
-      )}
     </>
   );
 }
@@ -518,6 +508,7 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const showCache = useSettings((s) => s.cacheHits);
   const friendly = useSettings((s) => s.friendlyModelNames);
   const detail = useSettings((s) => s.chatDetail);
+  const ws = useWorkspace();
   // The user's own choice to show or hide the work, kept over what the detail level would do.
   const [workOverride, setWorkOverride] = useState<boolean | null>(null);
   // A reply from an on-device model first waits on the model loading and the prompt being read.
@@ -553,6 +544,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const finished = message.status === 'done';
   const sources = useMemo(() => (assistant && finished ? sourcesOf(content) : []), [assistant, finished, content]);
   const made = useMemo(() => (assistant && !streamingReply ? filesOf(content) : []), [assistant, streamingReply, content]);
+  const readPreviews = useMemo(
+    () => (assistant && !streamingReply ? imageReads(content, segments, ws) : null),
+    [assistant, streamingReply, content, segments, ws]
+  );
 
   const copy = async () => {
     await Clipboard.setStringAsync(text);
@@ -641,17 +636,18 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const answered = !!split?.chars && (!streaming || split.chars > ANSWER_CHARS);
   const working = streaming && !answered;
   // Compact and normal start folded; detailed shows the work until the answer comes; verbose keeps it.
-  const workOpen = workOverride ?? (detail === 'verbose' || (detail === 'detailed' && !answered));
+  const workOpen = workOverride ?? (detail === 'verbose' || (detail === 'detailed' && working));
+  const showSteps = !split || workOpen;
   // Folded work that's still under way shows its current step in one line, except when compact.
   const workStep =
     split && working && !workOpen && detail !== 'compact' ? (
-      <CurrentStep seg={waiting ? null : split.work[split.work.length - 1]} onPress={() => setWorkOverride(true)} />
+      <CurrentStep seg={waiting ? null : segments[split.end]} onPress={() => setWorkOverride(true)} />
     ) : null;
   // From the start of the reply to the start of its answer; replies saved without that time add up their steps.
   const workedMs =
     split && answered && split.at
       ? split.at - message.createdAt
-      : (split?.work ?? []).reduce(
+      : (split ? segments : []).reduce(
           (ms, s) => ms + (s.kind === 'tool' ? (s.part.durationMs ?? 0) : s.kind === 'thought' ? (s.ms ?? 0) : 0),
           0
         );
@@ -660,45 +656,51 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const canAnswerNow =
     working && !!onRegenerate && segments.some((s) => s.kind !== 'text') && (split ? true : lastSeg?.kind !== 'text');
 
-  const render = (seg: Segment, i: number) =>
-    seg.kind === 'tool' ? (
-      seg.part.name === 'exit_plan_mode' ? (
-        !planning.includes(seg.part) && <PlanCard key={seg.part.id} part={seg.part} />
-      ) : (
-        !asking.includes(seg.part) && <ToolCall key={seg.part.id} part={seg.part} />
-      )
-    ) : seg.kind === 'thought' ? (
-      <Thoughts
-        key={`r${i}`}
-        text={seg.text}
-        ms={seg.ms}
-        live={streaming && seg === lastSeg && seg.ms == null}
-        keepOpen={detail === 'verbose'}
-      />
-    ) : (
-      !!seg.text.trim() && <Markdown key={`t${i}`} value={seg.text} live={streaming && seg === lastSeg} />
+  const render = (seg: Segment, i: number) => {
+    if (seg.kind === 'text') {
+      return !!seg.text.trim() && <Markdown key={`t${i}`} value={seg.text} live={streaming && seg === lastSeg} />;
+    }
+    if (seg.kind === 'thought') {
+      return showSteps && (
+        <Thoughts
+          key={`r${i}`}
+          text={seg.text}
+          ms={seg.ms}
+          live={streaming && seg === lastSeg && seg.ms == null}
+          keepOpen={detail === 'verbose'}
+        />
+      );
+    }
+
+    const part = seg.part;
+    if (asking.includes(part) || planning.includes(part)) return null;
+    if (part.name === 'exit_plan_mode') return showSteps && <PlanCard key={part.id} part={part} />;
+    const path = readPreviews?.get(part);
+    if (!showSteps && !path) return null;
+    return (
+      <Fragment key={`tool-${part.id}`}>
+        {showSteps && <ToolCall part={part} showImages={!readPreviews || !isImageRead(part)} />}
+        {path && part.images?.map((img) => (
+          <ChatImage key={img.file} src={attachmentUri(img.file)} alt={path.split('/').pop()} link={path} fit="contain" />
+        ))}
+      </Fragment>
     );
+  };
 
   return (
     <View style={styles.assistantRow}>
-      {split ? (
-        <>
-          <Work
-            segments={split.work}
-            open={workOpen}
-            onToggle={() => setWorkOverride(!workOpen)}
-            working={working}
-            since={message.createdAt}
-            ms={workedMs}
-            step={workStep}
-            render={render}
-            content={message.content}
-          />
-          {split.answer.map((seg, i) => render(seg, split.work.length + i))}
-        </>
-      ) : (
-        segments.map(render)
+      {split && (
+        <WorkHeader
+          open={workOpen}
+          onToggle={() => setWorkOverride(!workOpen)}
+          working={working}
+          since={message.createdAt}
+          ms={workedMs}
+          content={message.content}
+        />
       )}
+      {segments.map(render)}
+      {workStep}
       {asking.map((part) => (
         <QuestionCard key={part.id} part={part} />
       ))}

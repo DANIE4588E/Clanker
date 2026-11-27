@@ -74,7 +74,7 @@ function Broken({ height }: { height?: number }) {
  * A markdown image: full width at its own aspect ratio, tap to open. A web page in the workspace
  * renders live instead, to use in place.
  */
-function ChatImageInner({ src, alt, title }: { src: string; alt?: string; title?: string }) {
+function ChatImageInner({ src, alt, title, link, fit = 'cover' }: Pick<ImageCard, 'title' | 'link' | 'fit'> & { src: string; alt?: string }) {
   const { colors } = useTheme();
   // Resolving a workspace path checks the file, so it is done once, not on every streamed token.
   const ws = useWorkspace();
@@ -98,12 +98,12 @@ function ChatImageInner({ src, alt, title }: { src: string; alt?: string; title?
       {failed ? (
         <Broken />
       ) : (
-        <Pressable onPress={() => openTarget(undefined, src, ws)} accessibilityRole="imagebutton" accessibilityLabel={alt || title || 'Image'}>
+        <Pressable onPress={() => openTarget(link, src, ws)} accessibilityRole="imagebutton" accessibilityLabel={alt || title || 'Image'}>
           <Image
             source={source}
-            // Very tall images are cut down rather than taking over the reply.
+            // Cap the height so a tall image can't take over the reply.
             style={[styles.inlineImage, { aspectRatio: Math.max(ratio, 0.6), backgroundColor: colors.surface }]}
-            contentFit="cover"
+            contentFit={fit}
             // Fade in only the first time; an image seen before appears straight from the cache.
             transition={known ? 0 : 150}
             onLoad={(e) => {

@@ -68,6 +68,27 @@ const STUDY_BLOCKS = new Map<string, { load: () => StudyBlock; pending: string }
 const loadDiagram = () => (require('./study/Diagram') as typeof import('./study/Diagram')).Diagram;
 /* eslint-enable @typescript-eslint/no-require-imports */
 
+/** Image destinations that this Markdown will render, including images in cards. */
+export function markdownImageSources(value: string): string[] {
+  const sources: string[] = [];
+  type Token = ReturnType<typeof MarkedLexer>[number];
+  function collect(tokens: Token[]) {
+    for (const token of tokens) {
+      if (token.type === 'image') sources.push(token.href);
+      if (token.type === 'code' && token.lang?.trim().split(/\s+/)[0]?.toLowerCase() === 'images') {
+        for (const card of parseImages(token.text) ?? []) sources.push(card.url);
+      }
+      if (token.type === 'list') collect(token.items);
+      if (token.type === 'table') {
+        for (const cell of [...token.header, ...token.rows.flat()]) collect(cell.tokens);
+      }
+      if ('tokens' in token && token.tokens) collect(token.tokens);
+    }
+  }
+  collect(MarkedLexer(value, { gfm: true }));
+  return sources;
+}
+
 /** Shown in place of a chart or image block whose JSON is still streaming in. */
 function Pending({ label }: { label: string }) {
   const { colors } = useTheme();

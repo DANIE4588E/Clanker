@@ -64,6 +64,8 @@ Background jobs run in their own worker (or shell process) while the model keeps
 
 For formats with no built-in reader, the model is told to write a script that handles the file. Attached files are copied into the workspace. Files the agent writes show up as chips under its reply (tap to open, long-press to share), and in **Settings → Workspace files**, which lists every workspace.
 
+Reply text and inline visuals stay visible when **Worked for…** is collapsed. If the agent reads a workspace image without embedding it elsewhere in the reply, a preview appears where it read the image. Files handed over by the agent can be opened below the reply.
+
 The Python and JavaScript runtimes run in a hidden WebView and load Pyodide from jsDelivr on first use (cached afterwards). The shell is a local Expo module ([modules/clanker-shell](modules/clanker-shell)), so it needs a development build; it isn't in Expo Go, and iOS can't spawn processes at all.
 
 ## Plugins
