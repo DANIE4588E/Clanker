@@ -1,3 +1,36 @@
+# Clanker 1.3.0-beta.8
+
+## Reinstall once: a new signing key
+- Clanker is now signed with its own release key instead of the shared development key, so nobody else can publish an update that installs over it. Because the key changed, this version can't install over an earlier one: **uninstall Clanker first**, then install this version. Uninstalling removes your chats, API keys and sign-ins.
+- In-app updates now pick the download built for your phone's processor, so they're about half the size. Before installing, the app checks that a download is signed with the same key as the app you have, and refuses anything else.
+
+## Remote backends: update the bridge
+- The phone no longer sends your bridge token over the network. It signs each request with the token, and the bridge signs its replies, so a stale address or someone on the same Wi-Fi can't pick up the token or pose as your PC. Pairing is unchanged.
+- **Update the bridge on each PC**: dsh-clanker-bridge 0.6.0 for Harness Desktop, hermes-clanker-bridge 0.2.0 for Hermes, or a restart for a bridge run from this repo. Older bridges show "Update the bridge" in this version, while the new bridges still work with older Clanker versions.
+- The Harness plugin now works with every Harness Desktop 0.2 release (0.2.2 and later had been skipping it), and the Hermes plugin adapts to whatever the running Hermes offers rather than to one version.
+- An idle remote chat no longer rewrites the chat every 750 ms while waiting. On the PC, the bridge saves less often while a reply streams, prunes turns older than 30 days and stops re-reading unchanged workspace files.
+
+## Faster to open, smoother to use
+- **Launch reads a small index instead of every chat.** A chat's messages load the first time you open it, so startup no longer slows down as your history grows. Sidebar search reads other chats in the background, and title matches appear at once.
+- While a reply streams, only that reply is saved, not the whole chat. A reply cut off when the app closes still resumes on the next launch.
+- **Typing no longer re-renders every message** in a long chat.
+- Streaming does less work per update: long thoughts, maths, tool calls with large arguments, step lists and sources all update only what changed.
+- File names in replies are checked against a cached list of the workspace instead of the file system each time. Find in chat and the usage heatmap reuse earlier work.
+- Diagrams are drawn once by one shared renderer and cached, instead of each loading its own copy of Mermaid.
+- Code highlighting and study cards load the first time they're needed.
+
+## Safer by default
+- Sign-ins use a secure random source for their codes and reject a return link that doesn't carry the expected state.
+- When two parts of the app refresh the same plugin's token at once, the second one now reuses the refreshed token instead of failing.
+- MCP sign-in only follows https addresses that belong to the server you're connecting to.
+- Extra endpoint headers and plugin client secrets moved from plain settings files to the device keychain. This happens automatically on first launch.
+- Scripts run in a separate runtime for each chat, so one chat's script can't see another chat's files.
+- Documents, EPUBs and skill archives that would expand to an unreasonable size are refused instead of freezing the app.
+- Stopping or timing out a shell command now also stops the processes it started. Typing on your behalf through phone control puts your clipboard back afterwards.
+- Saving is reliable again: since Expo SDK 58, a write could finish out of order or fail silently. A chat file that can't be read is now kept aside instead of being written over.
+
+---
+
 # Clanker 1.3.0-beta.7
 
 ## Plan mode, the way Claude Code does it
