@@ -1,6 +1,8 @@
 # Clanker 1.3.0-beta.9
 
 - Study quizzes can include open-ended questions. Tap **Submit** to have the chat’s Clanker model mark a written answer and suggest an answer if it’s incorrect. **See results** appears once every question has been answered and graded.
+- Reply text and inline visuals now **stay visible when "Worked for…" is collapsed**: only the tool steps tuck away. If the agent reads a workspace image without embedding it in the reply, a preview shows where it read it, and files the agent hands over open from below the reply.
+- The composer **slides out of the way** instead of vanishing when Find in Chat, a dialog or any other text field takes the keyboard, and the conversation expands into the space it gives up. Expanding and collapsing the box is snappier.
 
 ---
 
