@@ -89,6 +89,7 @@ export default function RootLayout() {
               <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
               <Stack.Screen name="settings/index" options={{ title: 'Settings' }} />
               <Stack.Screen name="settings/general" options={{ title: 'General' }} />
+              <Stack.Screen name="settings/custom-instructions" options={{ title: 'Custom instructions' }} />
               <Stack.Screen name="settings/providers" options={{ title: 'Providers' }} />
               <Stack.Screen name="settings/agent" options={{ title: 'Agent' }} />
               <Stack.Screen name="settings/appearance" options={{ title: 'Appearance' }} />

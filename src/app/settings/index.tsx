@@ -61,7 +61,7 @@ export default function SettingsScreen() {
         <Row
           icon="sliders"
           title="General"
-          detail="Memory, chat titles, compression and follow-ups"
+          detail="Custom instructions, memory and chat behavior"
           onPress={() => router.push('/settings/general')}
         />
         <Row

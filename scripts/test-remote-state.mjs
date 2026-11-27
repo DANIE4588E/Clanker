@@ -19,19 +19,26 @@ function app({ snapshot } = {}) {
   // The chats' file-per-chat storage, minus the files: every chat here is loaded (no stubs).
   Object.assign(storage, { splitJsonFileStorage: () => storage.jsonFileStorage, isStub: () => false, stubSummary: () => undefined, stubLoaded: () => true, loadStub() {}, restub: (entry, patch) => ({ ...entry, ...patch }) });
   const ui = { currentId: null, newChatMemoryOff: false, newChatProjectId: null };
+  const settings = { customInstructions: '' };
+  const projects = {};
+  const sessions = [];
   const mocks = {
     'react-native': { AppState: { currentState: 'active' } },
     '@/lib/storage': storage,
     '@/lib/attachments': { deleteAttachment() {} },
     '@/lib/remote/cache': { removeRemoteCache() {} },
     '@/lib/workspace': { chatWorkspace: () => ({ remove() {} }) },
-    '@/store/projects': { useProjects: { getState: () => ({ projects: {} }) } },
+    '@/store/projects': { useProjects: { getState: () => ({ projects }) } },
+    '@/store/settings': { useSettings: { getState: () => settings } },
     '@/store/ui': { useUI: { getState: () => ui } },
     '@/lib/notifications': { notifyReplyFinished: async () => {} },
     '@/lib/remote/client': { RemoteAdapter: class {
       constructor(backend) { this.backend = backend; }
       info() { return snapshot ? Promise.resolve({}) : new Promise(() => {}); }
-      ensureSession() { return Promise.resolve({ sessionId: 'session' }); }
+      ensureSession(chatId, model, instructions) {
+        sessions.push({ chatId, instructions });
+        return Promise.resolve({ sessionId: 'session' });
+      }
       start() { return Promise.resolve({ id: 'run' }); }
       snapshot() { return Promise.resolve(snapshot); }
     } },
@@ -58,7 +65,7 @@ function app({ snapshot } = {}) {
     vm.runInThisContext(`(function(require,module,exports){${compiled}\n})`, { filename: actual })(localRequire, module, module.exports);
     loaded.set(normalized, module.exports); return module.exports;
   }
-  return { chats: load('@/store/chats').useChats, backends: load('@/store/backends').useBackends, remote: load('@/lib/remote/chat'), chat: load('src/lib/chat'), ui };
+  return { chats: load('@/store/chats').useChats, backends: load('@/store/backends').useBackends, remote: load('@/lib/remote/chat'), chat: load('src/lib/chat'), ui, settings, projects, sessions };
 }
 
 test('backend is locked at first message; another chat selection cannot retarget or steer queued messages', () => {
@@ -134,6 +141,24 @@ test('reported remote context and reply statistics persist through chat reopenin
   assert.equal(restored.conversations[id].unread, true);
   assert.deepEqual(restored.conversations[id].remote.context, metrics.context);
   assert.deepEqual(restored.conversations[id].messages.at(-1).stats, saved.messages.at(-1).stats);
+});
+
+test('remote sessions receive the instructions saved at the first message', { timeout: 3000 }, async () => {
+  const f = app({ snapshot: { id: 'run', sessionId: 'session', cursor: 1, state: 'completed', content: [], files: [], controls: [] } });
+  const backend = { id: 'harness', bridgeId: 'bridge', name: 'Harness', kind: 'harness', model: 'deepseek/model', models: ['deepseek/model'], baseUrl: 'http://a' };
+  f.backends.getState().save(backend);
+  f.backends.getState().select(backend.id);
+  f.ui.newChatProjectId = 'project';
+  f.projects.project = { instructions: 'Use JSON.' };
+  f.settings.customInstructions = 'Keep answers brief.';
+  const id = f.remote.sendRemoteMessage(null, 'Hello', []);
+  f.settings.customInstructions = 'Give detailed answers.';
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(f.sessions.length, 1);
+  assert.equal(f.sessions[0].chatId, id);
+  assert.match(f.sessions[0].instructions, /Keep answers brief\.\n\nProject instructions:\nUse JSON\.$/);
+  assert.equal(f.sessions[0].instructions, f.chats.getState().conversations[id].remote.instructions);
 });
 
 test('Harness uses its advertised effort default and captures a later selection per turn', () => {

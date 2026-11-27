@@ -56,6 +56,7 @@ export function useContextUsage(conversationId: string | null, enabled: boolean)
   const withTools = useSettings((s) => s.tools);
   const disabledTools = useSettings((s) => s.disabledTools);
   const memory = useSettings((s) => s.memory);
+  const customInstructions = useSettings((s) => s.customInstructions);
   const memories = useMemory((s) => s.memories);
   const newChatMemoryOff = useUI((s) => s.newChatMemoryOff);
   const conversation = useThrottledConversation(conversationId);
@@ -76,7 +77,7 @@ export function useContextUsage(conversationId: string | null, enabled: boolean)
       tools: tools.length ? tokensOf(JSON.stringify(tools)) : 0,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, remote, budget, withTools, disabledTools, memory, memories, newChatMemoryOff, conversationId, replyId, count]);
+  }, [enabled, remote, budget, withTools, disabledTools, memory, memories, newChatMemoryOff, customInstructions, conversationId, replyId, count]);
 
   const messages = useMemo(() => {
     if (!enabled || remote || !conversation) return 0;

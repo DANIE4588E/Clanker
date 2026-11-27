@@ -14,6 +14,7 @@ export type ModelRef = { endpointId: string; model: string };
 export type CompressionConfig = { trigger: number; target: number };
 
 export const COMPRESSION_DEFAULTS: CompressionConfig = { trigger: 60, target: 30 };
+export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 4000;
 
 /** What sending does while a reply is running: wait for it to finish, or steer it mid-task. */
 export type FollowUpMode = 'queue' | 'steer';
@@ -66,6 +67,8 @@ interface SettingsState {
   web: boolean;
   search: SearchConfig;
   compression: CompressionConfig;
+  /** User-written defaults for chat replies. */
+  customInstructions: string;
   /** Whether chats use and save memories about the user. */
   memory: boolean;
   /** Whether a short request after each reply saves anything worth remembering from it. */
@@ -107,6 +110,7 @@ interface SettingsState {
   setWeb: (on: boolean) => void;
   setSearch: (search: SearchConfig) => void;
   setCompression: (compression: CompressionConfig) => void;
+  setCustomInstructions: (instructions: string) => void;
   setMemory: (on: boolean) => void;
   setMemoryAuto: (on: boolean) => void;
   setSkillsAuto: (on: boolean) => void;
@@ -141,6 +145,7 @@ export const useSettings = create<SettingsState>()(
       web: true,
       search: { provider: 'firecrawl' },
       compression: COMPRESSION_DEFAULTS,
+      customInstructions: '',
       memory: true,
       memoryAuto: true,
       skillsAuto: true,
@@ -208,6 +213,7 @@ export const useSettings = create<SettingsState>()(
       setWeb: (web) => set({ web }),
       setSearch: (search) => set({ search }),
       setCompression: (compression) => set({ compression }),
+      setCustomInstructions: (instructions) => set({ customInstructions: instructions.trim().slice(0, MAX_CUSTOM_INSTRUCTIONS_CHARS) }),
       setMemory: (memory) => set({ memory }),
       setMemoryAuto: (memoryAuto) => set({ memoryAuto }),
       setSkillsAuto: (skillsAuto) => set({ skillsAuto }),

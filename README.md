@@ -19,6 +19,8 @@ Expand a model row to set its **Context budget**, **Max output tokens**, **Input
 
 A blue dot to the left of a chat title in the sidebar means a reply finished while you were away from that chat. It appears in the same spot as the spinner and clears when you view the chat again.
 
+**Settings → General → Custom instructions** saves your default preferences for how chat models respond. Edits apply to the next reply in Clanker chats, including temporary chats. Remote chats keep the instructions saved when you first message them. Project instructions take precedence. To remove your defaults, clear the field and tap **Save**.
+
 ## Remote agent backends
 
 **Settings → Backends** adds named **Hermes Agent** and **DeepSeek Harness** connections alongside Clanker's built-in agent. Choose the backend on an empty chat before the first message; existing chats keep their backend and remote model. Each remote chat creates and resumes its own session rather than attaching to sessions created in another application.

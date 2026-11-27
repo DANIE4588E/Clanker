@@ -233,10 +233,8 @@ export function agentSystemPrompt() {
 }
 
 /**
- * The whole system prompt of a chat: the agent prompt when it has tools, its project's
- * instructions when it is in one, and its memories when memory is on. Undefined when there is none
- * of these. Stays the same through a chat as long as the tool and project settings do, since the
- * memories shown with tools are the chat's snapshot. Without tools they change as memory does.
+ * The whole system prompt of a chat, including the user's current custom instructions and any
+ * project instructions. With tools, memories come from the chat's snapshot for prompt caching.
  */
 export function systemPrompt(conversationId: string | null, withTools: boolean) {
   // Without tools there are no context notes to carry memory changes, so the prompt shows memory as
@@ -256,7 +254,13 @@ export function systemPrompt(conversationId: string | null, withTools: boolean) 
   // tools there is neither, so the blocks ride here while the plugin is added, and the rules too
   // while study mode is on.
   const study = withTools || !studyAvailable() ? '' : [STUDY_SECTION, isStudying(conversationId) && STUDY_RULES].filter(Boolean).join('\n\n');
-  const parts = [withTools ? agentSystemPrompt() : '', study, skills, projectSection(conversationId, withTools), memory].filter(Boolean);
+  const { customInstructions } = useSettings.getState();
+  const custom = customInstructions && lines(
+    '# Custom instructions',
+    "Follow the user's general preferences below unless the project or the current request gives more specific instructions.",
+    customInstructions,
+  );
+  const parts = [withTools ? agentSystemPrompt() : '', study, skills, custom, projectSection(conversationId, withTools), memory].filter(Boolean);
   return parts.length ? parts.join('\n\n') : undefined;
 }
 

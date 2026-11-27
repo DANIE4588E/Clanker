@@ -1,6 +1,7 @@
 import { useBackends } from '@/store/backends';
 import { messageText, useChats } from '@/store/chats';
 import { useProjects } from '@/store/projects';
+import { useSettings } from '@/store/settings';
 import { useUI } from '@/store/ui';
 import type { AttachmentPart } from '@/lib/providers';
 import { firstLine } from '@/lib/quotes';
@@ -47,9 +48,19 @@ export function sendRemoteMessage(id: string | null, text: string, attachments: 
     backend = useBackends.getState().remotes.find((b) => b.id === useBackends.getState().selected);
     if (!backend?.bridgeId || !backend.model) throw new Error('Test and save a backend connection in Settings → Providers first.');
     const projectId = useUI.getState().newChatProjectId;
+    const projectInstructions = projectId ? useProjects.getState().projects[projectId]?.instructions ?? '' : '';
+    const { customInstructions } = useSettings.getState();
+    const instructions = customInstructions
+      ? [
+          `General preferences (follow unless the project or the current request gives more specific instructions):\n${customInstructions}`,
+          projectInstructions && `Project instructions:\n${projectInstructions}`,
+        ].filter(Boolean).join('\n\n')
+      : projectInstructions;
     id = chats.create('', backend.model, {
-      backendId: backend.id, remote: { bridgeId: backend.bridgeId, effort: resolveRemoteEffort(backend, backend.model)?.level, instructions: projectId ? useProjects.getState().projects[projectId]?.instructions ?? '' : '' }, memory: false,
-      ...(useUI.getState().newChatProjectId ? { projectId: useUI.getState().newChatProjectId! } : {}),
+      backendId: backend.id,
+      remote: { bridgeId: backend.bridgeId, effort: resolveRemoteEffort(backend, backend.model)?.level, instructions },
+      memory: false,
+      ...(projectId ? { projectId } : {}),
     });
     chats.rename(id, firstLine(text).slice(0, 60) || 'Attachment', true);
   }

@@ -15,6 +15,7 @@ const FOLLOW_UPS: { value: FollowUpMode; label: string; icon: 'list' | 'corner-d
 /** Settings → General: how chats behave. */
 export default function GeneralScreen() {
   const { colors } = useTheme();
+  const hasCustomInstructions = useSettings((s) => !!s.customInstructions);
   const memory = useSettings((s) => s.memory);
   const setMemory = useSettings((s) => s.setMemory);
   const showArchived = useSettings((s) => s.showArchived);
@@ -36,6 +37,13 @@ export default function GeneralScreen() {
   return (
     <ScrollView style={{ backgroundColor: colors.background }} contentContainerStyle={styles.content}>
       <Section title="Chats">
+        <Row
+          icon="edit-3"
+          title="Custom instructions"
+          detail="Set defaults for how models respond"
+          value={hasCustomInstructions ? 'Set' : undefined}
+          onPress={() => router.push('/settings/custom-instructions')}
+        />
         <ToggleRow
           icon="bookmark"
           title="Memory"

@@ -2,6 +2,8 @@
 
 - **Fetch models** opens a picker with all new models selected. Choose individual models or toggle the whole list before adding them. Existing models keep their settings.
 - Expand any model in **Settings → Providers** to edit its context budget, maximum output tokens, input types, and reasoning levels. Reasoning levels can each send a custom API value.
+- **Settings → General → Custom instructions** lets you set defaults for how models respond. Edits apply to the next reply in Clanker chats. Remote chats keep the instructions they start with.
+- A blue dot in the sidebar marks chats where a reply finished while you were away. It clears when you return to the chat.
 
 ---
 
