@@ -1,3 +1,10 @@
+# Clanker 1.3.0-beta.10
+
+- **Fetch models** opens a picker with all new models selected. Choose individual models or toggle the whole list before adding them. Existing models keep their settings.
+- Expand any model in **Settings → Providers** to edit its context budget, maximum output tokens, input types, and reasoning levels. Reasoning levels can each send a custom API value.
+
+---
+
 # Clanker 1.3.0-beta.9
 
 - Study quizzes can include open-ended questions. Tap **Submit** to have the chat’s Clanker model mark a written answer and suggest an answer if it’s incorrect. **See results** appears once every question has been answered and graded.

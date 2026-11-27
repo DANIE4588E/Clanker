@@ -9,6 +9,7 @@ import {
 } from '../subscriptions';
 import { guessEfforts } from './effort';
 import { getJson, joinUrl, ProviderError, readSSE, request } from './http';
+import { optionsForModel } from './modelOptions';
 import { withSubscriptionAccount } from './subscriptionRoute';
 import type { Endpoint, ModelInfo, ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './types';
 
@@ -217,13 +218,15 @@ export const codex: ProviderAdapter = {
     return withSubscriptionAccount(endpoint, { model, signal, hasStarted: () => started }, (account) => {
       const run = async (forceRefresh: boolean) => {
         const creds = await getValidCredentials(endpoint, { accountId: account.id, forceRefresh });
+        const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
         const body: Record<string, unknown> = {
           model,
           instructions: system?.trim() || 'You are a helpful assistant.',
           input: toCodexInput(messages),
           store: false,
           stream: true,
-          ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
+          ...(maxOutput ? { max_output_tokens: maxOutput } : {}),
+          ...(effort ? { reasoning: { effort: effort === 'off' ? 'none' : effort, summary: 'auto' } } : {}),
           ...(tools?.length
             ? {
                 tools: tools.map((t) => ({

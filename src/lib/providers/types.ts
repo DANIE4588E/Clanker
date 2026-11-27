@@ -172,6 +172,17 @@ export type ToolSpec = {
   parameters: Record<string, unknown>;
 };
 
+export type ModelMediaInput = 'image' | 'video';
+
+export type ModelOptions = {
+  maxOutputTokens?: number;
+  /** Text is always available. An absent list uses the provider's existing media behavior. */
+  mediaInputs?: ModelMediaInput[];
+  reasoningDisabled?: boolean;
+  /** Optional wire values keyed by the levels in Endpoint.efforts. */
+  effortValues?: Record<string, string>;
+};
+
 /** Token counts the server reported for a response, as far as it reports them. */
 export type StreamUsage = {
   /** Tokens the model generated, thinking included. */
@@ -205,6 +216,7 @@ export interface Endpoint {
   contexts?: Record<string, number>;
   /** History budget in tokens per model, set by the user; overrides the one derived from `contexts`. */
   budgets?: Record<string, number>;
+  modelOptions?: Record<string, ModelOptions>;
   /** How OpenAI-compatible servers take the effort level; detected when fetching models. */
   effortParam?: EffortParam;
   /** Extra HTTP headers sent with every request, e.g. OpenRouter's HTTP-Referer. */

@@ -274,7 +274,9 @@ endpointHeaderSecrets.attach(useSettings);
 /** The model's effort levels and the one to use, or null when it has no effort control. */
 export function resolveEffort(state: Pick<SettingsState, 'endpoints' | 'efforts'>, ref: ModelRef | null) {
   if (!ref) return null;
-  const levels = state.endpoints.find((e) => e.id === ref.endpointId)?.efforts?.[ref.model];
+  const endpoint = state.endpoints.find((e) => e.id === ref.endpointId);
+  if (endpoint?.modelOptions?.[ref.model]?.reasoningDisabled) return null;
+  const levels = endpoint?.efforts?.[ref.model];
   if (!levels?.length) return null;
   const chosen = state.efforts[effortKey(ref)];
   return { levels, level: chosen && levels.includes(chosen) ? chosen : defaultEffort(levels) };

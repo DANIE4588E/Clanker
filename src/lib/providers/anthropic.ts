@@ -1,4 +1,5 @@
 import { getJson, joinUrl, readSSE, request } from './http';
+import { optionsForModel } from './modelOptions';
 import type { Endpoint, ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './types';
 
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -28,10 +29,12 @@ function isLegacyExtended(model: string) {
  * and on thinking-by-default models the summary display defaults to "omitted". Ask for
  * readable thinking whenever an effort level is set.
  */
-function thinkingBody(endpoint: Endpoint, model: string, effort?: string) {
+function thinkingBody(endpoint: Endpoint, model: string, effort?: string, maxOutput?: number) {
   if (!effort) return {};
+  if (effort === 'off' || effort === 'none') return { thinking: { type: 'disabled' } };
   if (isLegacyExtended(model)) {
-    const budget = EXTENDED_BUDGETS[effort] ?? 8192;
+    const budget = Math.min(EXTENDED_BUDGETS[effort] ?? 8192, maxOutput ? maxOutput - 1 : Infinity);
+    if (budget < 1024) return { thinking: { type: 'disabled' } };
     return { thinking: { type: 'enabled', budget_tokens: budget }, max_tokens: budget + 8192 };
   }
   // `display` is an Anthropic-first field; some proxies 400 on unknown fields, so only
@@ -103,6 +106,8 @@ export function buildAnthropicBody({
     if (!trailing.content.length) wire.pop();
   }
   const prefilling = wire[wire.length - 1]?.role === 'assistant';
+  const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
+  const thinking = effort && !prefilling ? thinkingBody(endpoint, model, effort, maxOutput) : {};
   for (const m of wire.filter((m) => m.role === 'user').slice(-2)) {
     const last = m.content.length - 1;
     if (last >= 0) m.content[last] = { ...m.content[last], cache_control: CACHE };
@@ -118,7 +123,9 @@ export function buildAnthropicBody({
     // model that takes effort allows at least 32K.
     max_tokens: 8192,
     ...(systemBlocks.length ? { system: systemBlocks } : {}),
-    ...(effort && !prefilling ? { output_config: { effort }, ...thinkingBody(endpoint, model, effort) } : {}),
+    ...(effort && !prefilling && thinking.thinking?.type !== 'disabled' ? { output_config: { effort } } : {}),
+    ...thinking,
+    ...(maxOutput ? { max_tokens: maxOutput } : {}),
     ...(tools?.length
       ? { tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })) }
       : {}),

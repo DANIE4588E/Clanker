@@ -19,6 +19,7 @@ import { fetch } from '@/lib/net';
 import { guessEfforts } from './effort';
 import { thinkingConfig, toGemini } from './gemini';
 import { ProviderError, readSSE } from './http';
+import { optionsForModel } from './modelOptions';
 import { withSubscriptionAccount } from './subscriptionRoute';
 import type { Endpoint, ModelInfo, ProviderAdapter, StreamUsage, ToolCall, ToolSpec, WireMessage } from './types';
 
@@ -205,6 +206,7 @@ export const antigravity: ProviderAdapter = {
         // thinking config was rejected: retry asking only for thoughts, then with no config at all.
         let res: Awaited<ReturnType<typeof streamFrom>> | undefined;
         let lastError: unknown;
+        const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
         for (const candidate of antigravityModelCandidates(model, effort)) {
           const configs: (Record<string, unknown> | undefined)[] = [
             { thinkingConfig: thinkingFor(candidate.model, candidate) },
@@ -213,7 +215,8 @@ export const antigravity: ProviderAdapter = {
           ];
           try {
             for (let i = 0; i < configs.length; i++) {
-              const request = buildRequest(messages, system, tools, configs[i]);
+              const config = maxOutput ? { ...configs[i], maxOutputTokens: maxOutput } : configs[i];
+              const request = buildRequest(messages, system, tools, config);
               try {
                 res = await open(buildAntigravityEnvelope(candidate.model, projectId, request));
                 break;

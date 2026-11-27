@@ -1,4 +1,5 @@
 import { guessEfforts } from './effort';
+import { optionsForModel } from './modelOptions';
 import { getJson, joinUrl, readSSE, request } from './http';
 import { uid } from '../storage';
 import type { Endpoint, ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './types';
@@ -13,7 +14,9 @@ type GeminiModel = { name: string; supportedGenerationMethods?: string[]; thinki
 const THINKING_BUDGETS: Record<string, number> = { none: 0, minimal: 512, low: 1024, medium: 8192, high: 24576 };
 
 export function thinkingConfig(model: string, effort: string) {
-  const levels = !/gemini-2\./.test(model) ? { thinkingLevel: effort } : { thinkingBudget: THINKING_BUDGETS[effort] ?? -1 };
+  const levels = !/gemini-2\./.test(model)
+    ? { thinkingLevel: effort }
+    : { thinkingBudget: effort === 'off' ? 0 : THINKING_BUDGETS[effort] ?? -1 };
   // Thought summaries are withheld unless asked for; without this the panel would stay empty.
   // REST takes camelCase here, unlike the snake_case inline_data elsewhere in this body.
   return { ...levels, includeThoughts: true };
@@ -36,9 +39,13 @@ export const gemini: ProviderAdapter = {
   },
 
   async stream({ endpoint, apiKey, model, messages, system, effort, tools, signal, onToken, onReasoning, onToolDraft }) {
+    const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
     const body = {
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-      ...(effort ? { generationConfig: { thinkingConfig: thinkingConfig(model, effort) } } : {}),
+      ...(effort || maxOutput ? { generationConfig: {
+        ...(effort ? { thinkingConfig: thinkingConfig(model, effort) } : {}),
+        ...(maxOutput ? { maxOutputTokens: maxOutput } : {}),
+      } } : {}),
       ...(tools?.length
         ? {
             tools: [

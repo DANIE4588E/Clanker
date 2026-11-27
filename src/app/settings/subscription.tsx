@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Pressable,
   ScrollView,
@@ -16,20 +17,25 @@ import {
 import Animated, { LinearTransition } from 'react-native-reanimated';
 import { WebView } from 'react-native-webview';
 import { BrandIcon } from '@/components/BrandIcon';
+import { FetchModelsDialog, type LoadProviderModels } from '@/components/FetchModelsDialog';
 import { Disclosure, Input, Label } from '@/components/Form';
+import { ModelSettingsList } from '@/components/ModelSettingsList';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { SubscriptionUsageCard } from '@/components/SubscriptionUsageCard';
-import { formatTokens, parseTokens } from '@/lib/context';
 import * as Haptics from '@/lib/haptics';
 import {
   getAdapter,
   guessEfforts,
   isSubscriptionType,
   type Endpoint,
+  type ModelInfo,
+  type ModelOptions,
   type SubscriptionAccount,
   type SubscriptionRouting,
   type SubscriptionType,
 } from '@/lib/providers';
+import { appendFetchedModels } from '@/lib/providers/modelImport';
+import { selectModelEntries } from '@/lib/providers/modelOptions';
 import { uid } from '@/lib/storage';
 import {
   ANTIGRAVITY_OAUTH,
@@ -55,7 +61,7 @@ import {
   type SubscriptionCredentials,
 } from '@/lib/subscriptions';
 import { fonts, useTheme } from '@/lib/theme';
-import { resolveBudget, useSettings } from '@/store/settings';
+import { useSettings } from '@/store/settings';
 import { useSubscriptionUsage } from '@/store/subscriptionUsage';
 
 const ROUTING_OPTIONS: { value: SubscriptionRouting; label: string; icon: 'shuffle' | 'user' }[] = [
@@ -81,7 +87,7 @@ export default function SubscriptionScreen() {
   const [efforts, setEfforts] = useState<Record<string, string[]>>(existing?.efforts ?? {});
   const [contexts, setContexts] = useState<Record<string, number>>(existing?.contexts ?? {});
   const [budgets, setBudgets] = useState<Record<string, number>>(existing?.budgets ?? {});
-  const [editing, setEditing] = useState<{ model: string; field: 'effort' | 'budget'; text: string } | null>(null);
+  const [modelOptions, setModelOptions] = useState<Record<string, ModelOptions>>(existing?.modelOptions ?? {});
   const [newModel, setNewModel] = useState('');
   const [modelFilter, setModelFilter] = useState('');
 
@@ -104,7 +110,8 @@ export default function SubscriptionScreen() {
   const [googleError, setGoogleError] = useState('');
   const [pastedCode, setPastedCode] = useState('');
   const [importText, setImportText] = useState('');
-  const [busy, setBusy] = useState<'auth' | 'fetch' | 'test' | null>(null);
+  const [loadModels, setLoadModels] = useState<LoadProviderModels | null>(null);
+  const [busy, setBusy] = useState<'auth' | 'test' | null>(null);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
 
   const deletedRef = useRef(false);
@@ -113,6 +120,7 @@ export default function SubscriptionScreen() {
   const persistRef = useRef<() => void>(() => {});
   const pollController = useRef<AbortController | null>(null);
   const meta = SUBSCRIPTION_META[type];
+  const savedModelOptions = useMemo(() => selectModelEntries(models, modelOptions), [models, modelOptions]);
 
   const byAccount = useSubscriptionUsage((s) => s.byAccount);
   const loadingMap = useSubscriptionUsage((s) => s.loading);
@@ -173,6 +181,7 @@ export default function SubscriptionScreen() {
       efforts: Object.fromEntries(models.flatMap((m) => (efforts[m]?.length ? [[m, efforts[m]]] : []))),
       contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
       budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
+      modelOptions: savedModelOptions,
       ...(primary?.email ?? primaryUsage?.email ? { subscriptionAccount: primary?.email ?? primaryUsage?.email } : {}),
       ...(primaryUsage?.plan ?? primary?.plan ? { subscriptionPlan: primaryUsage?.plan ?? primary?.plan } : {}),
       subscriptionAccounts: accList,
@@ -202,6 +211,7 @@ export default function SubscriptionScreen() {
         efforts: Object.fromEntries(models.flatMap((m) => (efforts[m]?.length ? [[m, efforts[m]]] : []))),
         contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
         budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
+        modelOptions: savedModelOptions,
         ...(primary?.email ?? primaryUsage?.email ? { subscriptionAccount: primary?.email ?? primaryUsage?.email } : {}),
         ...(primaryUsage?.plan ?? primary?.plan ? { subscriptionPlan: primaryUsage?.plan ?? primary?.plan } : {}),
         subscriptionAccounts: accounts,
@@ -226,6 +236,7 @@ export default function SubscriptionScreen() {
     efforts,
     contexts,
     budgets,
+    savedModelOptions,
     accounts,
     accountMode,
     activeAccountId,
@@ -263,6 +274,7 @@ export default function SubscriptionScreen() {
     setEfforts({});
     setContexts({});
     setBudgets({});
+    setModelOptions({});
     setStatus(null);
     setType(next);
     setName(SUBSCRIPTION_META[next].name);
@@ -470,30 +482,27 @@ export default function SubscriptionScreen() {
       ]
     );
 
-  const fetchModels = async () => {
+  const fetchModels = () => {
     if (!accounts.length) return setStatus({ ok: false, text: 'Sign in to an account first.' });
-    setBusy('fetch');
+    Keyboard.dismiss();
     setStatus(null);
-    try {
-      const ep = draft();
-      const { models: list } = await getAdapter(type).listModels(ep);
-      setModels(list.map((m) => m.id));
-      const found = Object.fromEntries(list.flatMap((m) => (m.efforts ? [[m.id, m.efforts]] : [])));
-      setEfforts(found);
-      setContexts(
-        Object.fromEntries(list.flatMap((m) => (m.contextLength && m.contextLength > 0 ? [[m.id, m.contextLength]] : [])))
-      );
+    const ep = draft();
+    setLoadModels(() => async () => {
+      const result = await getAdapter(ep.type).listModels(ep);
       void useSubscriptionUsage.getState().refresh(ep, { force: true });
-      const withEffort = Object.keys(found).length;
-      setStatus({
-        ok: true,
-        text: `Found ${list.length} model${list.length === 1 ? '' : 's'}${withEffort ? `, ${withEffort} with effort levels` : ''}.`,
-      });
-    } catch (e) {
-      setStatus({ ok: false, text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(null);
-    }
+      return result;
+    });
+  };
+
+  const addFetchedModels = (selected: ModelInfo[]) => {
+    setLoadModels(null);
+    const next = appendFetchedModels({ models, efforts, contexts }, selected);
+    const count = next.models.length - models.length;
+    if (!count) return;
+    setModels(next.models);
+    setEfforts(next.efforts);
+    setContexts(next.contexts);
+    setStatus({ ok: true, text: `Added ${count} model${count === 1 ? '' : 's'}.` });
   };
 
   const testConnection = async () => {
@@ -537,22 +546,6 @@ export default function SubscriptionScreen() {
       if (guessed) setEfforts({ ...efforts, [m]: guessed });
     }
     setNewModel('');
-  };
-
-  const commitEdit = () => {
-    if (!editing) return;
-    setEditing(null);
-    if (editing.field === 'effort') {
-      const levels = [...new Set(editing.text.split(/[\s,]+/).filter(Boolean).map((l) => l.toLowerCase()))];
-      const { [editing.model]: _, ...rest } = efforts;
-      setEfforts(levels.length ? { ...rest, [editing.model]: levels } : rest);
-      return;
-    }
-    const { [editing.model]: _, ...rest } = budgets;
-    if (!editing.text.trim()) return setBudgets(rest);
-    const tokens = parseTokens(editing.text);
-    if (tokens) setBudgets({ ...rest, [editing.model]: tokens });
-    else Alert.alert('Invalid context budget', 'Enter a token count such as 32000, 128K or 1M.');
   };
 
   const remove = () =>
@@ -947,12 +940,8 @@ export default function SubscriptionScreen() {
 
         <View style={styles.modelsHeader}>
           <Label>Models ({models.length})</Label>
-          <Pressable onPress={fetchModels} disabled={!!busy || !accounts.length} hitSlop={8} style={styles.inlineButton}>
-            {busy === 'fetch' ? (
-              <ActivityIndicator size="small" color={colors.link} />
-            ) : (
-              <Feather name="download-cloud" size={16} color={accounts.length ? colors.link : colors.textTertiary} />
-            )}
+          <Pressable onPress={fetchModels} disabled={!!busy || !!loadModels || !accounts.length} hitSlop={8} style={styles.inlineButton}>
+            <Feather name="download-cloud" size={16} color={accounts.length ? colors.link : colors.textTertiary} />
             <Text style={{ color: accounts.length ? colors.link : colors.textTertiary, fontSize: 15, fontWeight: '500' }}>
               Fetch models
             </Text>
@@ -973,79 +962,24 @@ export default function SubscriptionScreen() {
           </Pressable>
         </View>
 
-        {models.length > 0 && (
-          <Text style={[styles.hint, { color: colors.textTertiary }]}>
-            Tap a model to edit its effort levels, lowest first, or tap its context budget to override how much history
-            to keep.
-          </Text>
-        )}
-
         {models.length > 10 && (
           <Input value={modelFilter} onChangeText={setModelFilter} placeholder="Filter models" style={{ marginTop: 8 }} />
         )}
 
         {models.length > 0 && (
-          <View style={[styles.modelList, { backgroundColor: colors.surface }]}>
-            {visibleModels.slice(0, 200).map((m, i) => (
-              <Pressable
-                key={m}
-                onPress={() => setEditing({ model: m, field: 'effort', text: (efforts[m] ?? []).join(', ') })}
-                style={[styles.modelRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text numberOfLines={1} style={[styles.modelName, { color: colors.text }]}>
-                    {m}
-                  </Text>
-                  {editing?.model === m && editing.field === 'effort' ? (
-                    <Input
-                      autoFocus
-                      value={editing.text}
-                      onChangeText={(text) => setEditing({ ...editing, text })}
-                      onSubmitEditing={commitEdit}
-                      onBlur={commitEdit}
-                      placeholder="low, medium, high"
-                      returnKeyType="done"
-                      style={[styles.effortInput, { backgroundColor: colors.background }]}
-                    />
-                  ) : (
-                    <Text numberOfLines={1} style={[styles.effortLevels, { color: colors.textTertiary }]}>
-                      {efforts[m]?.length ? `Effort: ${efforts[m].join(' · ')}` : 'No effort control'}
-                    </Text>
-                  )}
-                  {editing?.model === m && editing.field === 'budget' ? (
-                    <Input
-                      autoFocus
-                      value={editing.text}
-                      onChangeText={(text) => setEditing({ ...editing, text })}
-                      onSubmitEditing={commitEdit}
-                      onBlur={commitEdit}
-                      placeholder="128K, 1M… (empty for auto)"
-                      returnKeyType="done"
-                      style={[styles.effortInput, { backgroundColor: colors.background }]}
-                    />
-                  ) : (
-                    <Pressable
-                      onPress={() => {
-                        const short = budgets[m] ? formatTokens(budgets[m]) : '';
-                        const text = !short || parseTokens(short) === budgets[m] ? short : String(budgets[m]);
-                        setEditing({ model: m, field: 'budget', text });
-                      }}
-                      hitSlop={4}
-                      style={{ alignSelf: 'flex-start' }}
-                    >
-                      <Text numberOfLines={1} style={[styles.effortLevels, { color: colors.textTertiary }]}>
-                        Context budget: {formatTokens(resolveBudget({ baseUrl: meta.baseUrl, contexts, budgets }, m))}
-                        {budgets[m] ? '' : ' (auto)'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-                <Pressable onPress={() => setModels(models.filter((x) => x !== m))} hitSlop={8}>
-                  <Feather name="x" size={16} color={colors.textTertiary} />
-                </Pressable>
-              </Pressable>
-            ))}
-          </View>
+          <ModelSettingsList
+            models={visibleModels}
+            type={type}
+            baseUrl={meta.baseUrl}
+            budgets={budgets}
+            contexts={contexts}
+            efforts={efforts}
+            options={modelOptions}
+            setModels={setModels}
+            setBudgets={setBudgets}
+            setEfforts={setEfforts}
+            setOptions={setModelOptions}
+          />
         )}
 
         <Disclosure title="Advanced & CLI import">
@@ -1112,6 +1046,14 @@ export default function SubscriptionScreen() {
           )}
         </Animated.View>
       </ScrollView>
+      {loadModels && (
+        <FetchModelsDialog
+          load={loadModels}
+          addedModels={models}
+          onAdd={addFetchedModels}
+          onClose={() => setLoadModels(null)}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -1204,11 +1146,6 @@ const styles = StyleSheet.create({
   inlineButton: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   addRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   addButton: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  modelList: { borderRadius: 12, marginTop: 8, overflow: 'hidden' },
-  modelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
-  modelName: { fontSize: 15, fontFamily: fonts.mono },
-  effortLevels: { fontSize: 13, marginTop: 3 },
-  effortInput: { marginTop: 8, paddingVertical: 8, fontSize: 14 },
   secondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',

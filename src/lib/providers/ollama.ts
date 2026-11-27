@@ -1,4 +1,5 @@
 import { guessEfforts } from './effort';
+import { optionsForModel } from './modelOptions';
 import { getJson, joinUrl, readLines, request } from './http';
 import { uid } from '../storage';
 import type { Endpoint, ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './types';
@@ -31,9 +32,11 @@ export const ollama: ProviderAdapter = {
   },
 
   async stream({ endpoint, apiKey, model, messages, system, effort, tools, signal, onToken, onReasoning, onToolDraft }) {
+    const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
     const body = {
       model,
       stream: true,
+      ...(maxOutput ? { options: { num_predict: maxOutput } } : {}),
       ...(effort ? { think: effort === 'on' ? true : effort === 'off' ? false : effort } : {}),
       ...(tools?.length
         ? {

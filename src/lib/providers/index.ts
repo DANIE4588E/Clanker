@@ -7,6 +7,7 @@ import { gemini } from './gemini';
 import { local } from './local';
 import { ollama } from './ollama';
 import { ProviderError } from './http';
+import { filterModelInputs, modelEffortValue, modelMediaInputs, optionsForModel } from './modelOptions';
 import { openai } from './openai';
 import { baseUrls, forgetBaseUrl, resolveBaseUrl } from './reach';
 import type { Endpoint, ProviderAdapter, ProviderType } from './types';
@@ -42,6 +43,8 @@ function withFailover(adapter: ProviderAdapter): ProviderAdapter {
   return {
     listModels: (endpoint, apiKey) => failover(endpoint, undefined, (e) => adapter.listModels(e, apiKey)),
     stream: (opts) => {
+      const options = optionsForModel(opts.endpoint, opts.model);
+      const messages = filterModelInputs(opts.messages, modelMediaInputs(opts.endpoint, options));
       let started = false;
       const mark =
         <A extends unknown[]>(fn: (...args: A) => void) =>
@@ -56,6 +59,8 @@ function withFailover(adapter: ProviderAdapter): ProviderAdapter {
           adapter.stream({
             ...opts,
             endpoint,
+            messages,
+            effort: modelEffortValue(options, opts.effort),
             onToken: mark(opts.onToken),
             onReasoning: opts.onReasoning && mark(opts.onReasoning),
             onToolDraft: opts.onToolDraft && mark(opts.onToolDraft),

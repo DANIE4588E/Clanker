@@ -1,4 +1,5 @@
 import { guessEfforts } from './effort';
+import { isOpenAINative, optionsForModel } from './modelOptions';
 import { getJson, joinUrl, readSSE, request } from './http';
 import { uid } from '../storage';
 import type { EffortParam, Endpoint, ProviderAdapter, StreamUsage, ToolCall, WireMessage } from './types';
@@ -86,6 +87,7 @@ function effortBody(endpoint: Endpoint, effort: string) {
   switch (endpoint.effortParam ?? detectEffortParam(endpoint, [])) {
     case 'reasoning':
       // `enabled` matters for models that only reason on request; effort picks the depth.
+      if (effort === 'off' || effort === 'none') return { reasoning: { enabled: false } };
       return { reasoning: { effort, enabled: true, exclude: false } };
     case 'chat_template_kwargs':
       // Hybrid models (Qwen3, GLM, ...) toggle thinking; gpt-oss's and Qwen3.8's templates read a level.
@@ -97,7 +99,7 @@ function effortBody(endpoint: Endpoint, effort: string) {
             : { enable_thinking: true, reasoning_effort: effort },
       };
     case 'reasoning_effort':
-      return { reasoning_effort: effort };
+      return { reasoning_effort: effort === 'off' && isOpenAINative(endpoint.baseUrl) ? 'none' : effort };
   }
 }
 
@@ -113,11 +115,14 @@ export const openai: ProviderAdapter = {
   },
 
   async stream({ endpoint, apiKey, model, messages, system, effort, tools, signal, onToken, onReasoning, onToolDraft }) {
+    const maxOutput = optionsForModel(endpoint, model)?.maxOutputTokens;
+    const outputField = isOpenAINative(endpoint.baseUrl) ? 'max_completion_tokens' : 'max_tokens';
     const body = {
       model,
       stream: true,
       // Token counts come in a last chunk, only when asked for.
       stream_options: { include_usage: true },
+      ...(maxOutput ? { [outputField]: maxOutput } : {}),
       ...(effort ? effortBody(endpoint, effort) : {}),
       ...(tools?.length
         ? {
@@ -227,9 +232,10 @@ function toOpenAI(m: WireMessage): object[] {
       },
     ];
   }
-  return [
-    m.images.length === 0
-      ? { role: m.role, content: m.text }
-      : { role: m.role, content: [...imageParts(m.images), ...(m.text ? [{ type: 'text', text: m.text }] : [])] },
-  ];
+  const videos = (m.files ?? []).filter((file) => file.mimeType.startsWith('video/')).map((file) => ({
+    type: 'video_url',
+    video_url: { url: `data:${file.mimeType};base64,${file.base64}` },
+  }));
+  const media = [...imageParts(m.images), ...videos];
+  return [{ role: m.role, content: media.length ? [...media, ...(m.text ? [{ type: 'text', text: m.text }] : [])] : m.text }];
 }

@@ -50,6 +50,124 @@ function loadSrc(relPath, extraDeps = {}) {
   return load(relPath);
 }
 
+test('selected catalogue models are appended without changing existing model settings', () => {
+  const { appendFetchedModels, newModels } = loadSrc('lib/providers/modelImport');
+  const current = {
+    models: ['manual', 'configured', 'auto'],
+    efforts: { configured: ['custom'] },
+    contexts: { configured: 96_000 },
+  };
+  const catalog = [
+    { id: 'configured', efforts: ['low', 'high'], contextLength: 128_000 },
+    { id: 'auto', efforts: ['high'], contextLength: 64_000 },
+    { id: 'add', efforts: ['low'], contextLength: 32_000 },
+    { id: 'add', efforts: ['high'], contextLength: 128_000 },
+    { id: 'skip', efforts: ['high'], contextLength: 16_000 },
+  ];
+
+  const available = newModels(current.models, catalog);
+  assert.deepEqual(available.map(({ id }) => id), ['add', 'skip']);
+  const next = appendFetchedModels(current, [catalog[0], catalog[1], available[0], catalog[3]]);
+  assert.deepEqual(next, {
+    models: ['manual', 'configured', 'auto', 'add'],
+    efforts: { configured: ['custom'], add: ['low'] },
+    contexts: { configured: 96_000, add: 32_000 },
+  });
+  assert.equal(appendFetchedModels(current, []), current);
+  assert.equal(appendFetchedModels(next, [available[0]]), next);
+});
+
+test('model options preserve legacy defaults and apply media and reasoning overrides per model', () => {
+  const { filterModelInputs, modelEffortValue, modelMediaInputs, optionsForModel, selectModelEntries } =
+    loadSrc('lib/providers/modelOptions');
+  const configured = { mediaInputs: ['video'], effortValues: { low: 'minimal' }, maxOutputTokens: 32 };
+  const endpoint = { type: 'openai', baseUrl: 'https://openrouter.ai/api/v1', modelOptions: { configured } };
+  const inputs = modelMediaInputs(endpoint, optionsForModel(endpoint, 'configured'));
+  assert.deepEqual(inputs, { image: false, video: true });
+  assert.deepEqual(modelMediaInputs(endpoint), { image: true, video: false });
+  assert.deepEqual(modelMediaInputs({ type: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' }), { image: true, video: true });
+  assert.deepEqual(modelMediaInputs({ ...endpoint, baseUrl: 'https://api.openai.com/v1' }, configured), { image: false, video: false });
+  assert.equal(modelEffortValue(configured, 'low'), 'minimal');
+  assert.equal(modelEffortValue(configured, 'high'), 'high');
+  assert.equal(modelEffortValue({ ...configured, reasoningDisabled: true }, 'low'), undefined);
+  assert.deepEqual(selectModelEntries(['configured'], { configured, removed: {} }), { configured });
+
+  const image = { mimeType: 'image/png', base64: 'aW1hZ2U=' };
+  const video = { mimeType: 'video/mp4', base64: 'dmlkZW8=', name: 'clip.mp4' };
+  const messages = [
+    { role: 'user', text: 'Describe this clip', images: [image], files: [video] },
+    { role: 'tool', text: '', images: [], results: [{ callId: '1', name: 'view', output: 'look', images: [image] }] },
+  ];
+  const filtered = filterModelInputs(messages, inputs);
+  assert.deepEqual(filtered[0], { ...messages[0], images: [] });
+  assert.deepEqual(filtered[1].results[0].images, []);
+  assert.deepEqual(filterModelInputs(messages, modelMediaInputs(endpoint))[0].files, []);
+  assert.deepEqual(messages[0].images, [image]);
+});
+
+test('chat history reads raw video attachments only when video input is enabled', async () => {
+  const { buildWire } = loadSrc('lib/context', { '@/store/chats': {}, './tools/describe': {} });
+  const unit = {
+    kind: 'user', key: 'turn-1', text: 'Describe this clip',
+    message: { content: [{ type: 'file', file: 'clip-file', name: 'clip.MP4', mimeType: 'application/octet-stream' }] },
+  };
+  const reads = [];
+  const options = {
+    endpointType: 'openai', withTools: false, tagged: false,
+    readBase64: async (file) => { reads.push(file); return 'dmlkZW8='; },
+  };
+  const disabled = await buildWire([unit], [], { ...options, mediaInputs: { image: true, video: false } });
+  assert.equal(disabled[0].files, undefined);
+  assert.deepEqual(reads, []);
+  const enabled = await buildWire([unit], [], { ...options, mediaInputs: { image: true, video: true } });
+  assert.deepEqual(enabled[0].files, [{ name: 'clip.MP4', mimeType: 'video/mp4', base64: 'dmlkZW8=' }]);
+  assert.deepEqual(reads, ['clip-file']);
+});
+
+test('providers serialize model output caps and video using their wire formats', async () => {
+  const requests = [];
+  const deps = {
+    '../storage': { uid: () => 'test' },
+    '@/lib/net': { fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return new Response('');
+    } },
+  };
+  const model = 'test';
+  const options = {
+    model,
+    messages: [{ role: 'user', text: 'Hi', images: [], files: [{ mimeType: 'video/mp4', base64: 'dmlkZW8=' }] }],
+    signal: new AbortController().signal,
+    onToken: () => {},
+  };
+  const endpoint = { id: 'test', models: [model], modelOptions: { [model]: { maxOutputTokens: 64 } } };
+  const { openai } = loadSrc('lib/providers/openai', deps);
+  await openai.stream({ ...options, endpoint: { ...endpoint, type: 'openai', baseUrl: 'https://openrouter.ai/api/v1' } });
+  assert.equal(requests.at(-1).max_tokens, 64);
+  assert.deepEqual(requests.at(-1).messages[0].content[0], { type: 'video_url', video_url: { url: 'data:video/mp4;base64,dmlkZW8=' } });
+  await openai.stream({ ...options, messages: [], endpoint: { ...endpoint, type: 'openai', baseUrl: 'https://api.openai.com/v1' } });
+  assert.equal(requests.at(-1).max_completion_tokens, 64);
+
+  const { gemini } = loadSrc('lib/providers/gemini', deps);
+  await gemini.stream({ ...options, effort: 'low', endpoint: { ...endpoint, type: 'gemini', baseUrl: 'https://gemini.test' } });
+  assert.equal(requests.at(-1).generationConfig.maxOutputTokens, 64);
+  assert.equal(requests.at(-1).generationConfig.thinkingConfig.thinkingLevel, 'low');
+  assert.deepEqual(requests.at(-1).contents[0].parts[0], { inline_data: { mime_type: 'video/mp4', data: 'dmlkZW8=' } });
+
+  const { ollama } = loadSrc('lib/providers/ollama', deps);
+  await ollama.stream({ ...options, endpoint: { ...endpoint, type: 'ollama', baseUrl: 'http://localhost:11434' } });
+  assert.equal(requests.at(-1).options.num_predict, 64);
+
+  const { buildAnthropicBody } = loadSrc('lib/providers/anthropic', deps);
+  const anthropic = { ...endpoint, type: 'anthropic', baseUrl: 'https://api.anthropic.com' };
+  const claude = 'claude-sonnet-4-5';
+  const limited = buildAnthropicBody({ endpoint: { ...anthropic, modelOptions: { [claude]: { maxOutputTokens: 2048 } } },
+    model: claude, messages: [], effort: 'high' });
+  assert.equal(limited.max_tokens, 2048);
+  assert.equal(limited.thinking.budget_tokens, 2047);
+  assert.equal(buildAnthropicBody({ endpoint: anthropic, model: claude, messages: [] }).max_tokens, 8192);
+});
+
 test('pure-JS SHA-256 and PKCE S256 match Node crypto', () => {
   const pkce = loadSrc('lib/subscriptions/pkce');
   for (const sample of ['', 'abc', 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk', 'x'.repeat(200)]) {

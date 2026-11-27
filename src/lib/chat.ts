@@ -1,5 +1,6 @@
 import { interruptContent, messageText, takeCutOffReplies, useChats, type CompressionBlock, type Conversation, type Message, type QueuedMessage } from '@/store/chats';
 import { resolveBudget, resolveEffort, resolveTaskModel, useSettings } from '@/store/settings';
+import { modelMediaInputs, optionsForModel } from './providers/modelOptions';
 import { localToolsOn } from '@/store/localModels';
 import { useUI } from '@/store/ui';
 import { deleteAttachment, duplicateAttachment, readAttachmentBase64, saveToWorkspace } from './attachments';
@@ -562,6 +563,7 @@ export async function compactChat(id: string, focus = '') {
           if (!current) throw new Error('This chat no longer exists.');
           const messages = await buildWire(historyUnits(current), current.compressions ?? [], {
             endpointType: endpoint.type,
+            mediaInputs: modelMediaInputs(endpoint, optionsForModel(endpoint, conversation.model)),
             withTools,
             tagged: withTools,
             notes: withTools ? current.notes : undefined,
@@ -782,6 +784,7 @@ async function runCompletion(
     if (!current) return Promise.resolve([]);
     return buildWire(historyUnits(current, replyId), current.compressions ?? [], {
       endpointType: endpoint.type,
+      mediaInputs: modelMediaInputs(endpoint, optionsForModel(endpoint, conversation.model)),
       withTools: !!tools,
       tagged: !!tools,
       notes: tools ? current.notes : undefined,

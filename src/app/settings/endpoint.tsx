@@ -1,9 +1,11 @@
 import Feather from '@expo/vector-icons/Feather';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { LinearTransition } from 'react-native-reanimated';
+import { FetchModelsDialog, type FetchedProviderModels, type LoadProviderModels } from '@/components/FetchModelsDialog';
 import { Chip, Disclosure, Input, Label } from '@/components/Form';
+import { ModelSettingsList } from '@/components/ModelSettingsList';
 import {
   getAdapter,
   guessEfforts,
@@ -12,13 +14,16 @@ import {
   resolveBaseUrl,
   type EffortParam,
   type Endpoint,
+  type ModelInfo,
+  type ModelOptions,
   type ProviderType,
 } from '@/lib/providers';
-import { formatTokens, parseTokens } from '@/lib/context';
+import { appendFetchedModels } from '@/lib/providers/modelImport';
+import { selectModelEntries } from '@/lib/providers/modelOptions';
 import { endpointHeaderSecrets } from '@/lib/secrets';
 import { apiKeys, uid } from '@/lib/storage';
 import { fonts, useTheme } from '@/lib/theme';
-import { resolveBudget, useSettings } from '@/store/settings';
+import { useSettings } from '@/store/settings';
 
 const TYPES: ProviderType[] = ['openai', 'anthropic', 'ollama', 'gemini'];
 
@@ -59,14 +64,15 @@ export default function EndpointScreen() {
   const [efforts, setEfforts] = useState<Record<string, string[]>>(existing?.efforts ?? {});
   const [contexts, setContexts] = useState<Record<string, number>>(existing?.contexts ?? {});
   const [budgets, setBudgets] = useState<Record<string, number>>(existing?.budgets ?? {});
+  const [modelOptions, setModelOptions] = useState<Record<string, ModelOptions>>(existing?.modelOptions ?? {});
   const [effortParam, setEffortParam] = useState<EffortParam>(existing?.effortParam ?? 'reasoning_effort');
-  const [editing, setEditing] = useState<{ model: string; field: 'effort' | 'budget'; text: string } | null>(null);
   const [newModel, setNewModel] = useState('');
   const [modelFilter, setModelFilter] = useState('');
   const [headersText, setHeadersText] = useState(formatHeaders(existing?.headers));
   // Headers come from the keychain just after launch; until then they're left as they are.
   const [headersLoaded, setHeadersLoaded] = useState(() => !existing || existing.headers !== undefined || endpointHeaderSecrets.isReady());
-  const [busy, setBusy] = useState<'fetch' | 'test' | null>(null);
+  const [loadModels, setLoadModels] = useState<LoadProviderModels | null>(null);
+  const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [savedOnce, setSavedOnce] = useState(!!existing);
 
@@ -101,6 +107,7 @@ export default function EndpointScreen() {
   }, [existing]);
 
   const alts = useMemo(() => altUrls.map((u) => u.trim()).filter(Boolean), [altUrls]);
+  const savedModelOptions = useMemo(() => selectModelEntries(models, modelOptions), [models, modelOptions]);
 
   const draft = (): Endpoint => ({
     id: endpointId,
@@ -112,6 +119,7 @@ export default function EndpointScreen() {
     efforts: Object.fromEntries(models.flatMap((m) => (efforts[m]?.length ? [[m, efforts[m]]] : []))),
     contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
     budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
+    modelOptions: savedModelOptions,
     ...(type === 'openai' ? { effortParam } : {}),
     headers: headersLoaded ? parseHeaders(headersText) : undefined,
   });
@@ -132,6 +140,7 @@ export default function EndpointScreen() {
         efforts: Object.fromEntries(models.flatMap((m) => (efforts[m]?.length ? [[m, efforts[m]]] : []))),
         contexts: Object.fromEntries(models.flatMap((m) => (contexts[m] ? [[m, contexts[m]]] : []))),
         budgets: Object.fromEntries(models.flatMap((m) => (budgets[m] ? [[m, budgets[m]]] : []))),
+        modelOptions: savedModelOptions,
         ...(type === 'openai' ? { effortParam } : {}),
         headers: headersLoaded ? parseHeaders(headersText) : undefined,
       };
@@ -143,7 +152,7 @@ export default function EndpointScreen() {
     if (!canSave) return;
     const timer = setTimeout(persist, 250);
     return () => clearTimeout(timer);
-  }, [endpointId, name, type, baseUrl, alts, apiKey, keyLoaded, models, efforts, contexts, budgets, effortParam, headersText, headersLoaded, canSave]);
+  }, [endpointId, name, type, baseUrl, alts, apiKey, keyLoaded, models, efforts, contexts, budgets, savedModelOptions, effortParam, headersText, headersLoaded, canSave]);
 
   useEffect(() => () => persistRef.current(), []);
 
@@ -156,6 +165,7 @@ export default function EndpointScreen() {
     setEfforts({});
     setContexts({});
     setBudgets({});
+    setModelOptions({});
     setEffortParam(preset.baseUrl.includes('openrouter.ai') ? 'reasoning' : 'reasoning_effort');
     setStatus(null);
   };
@@ -163,41 +173,32 @@ export default function EndpointScreen() {
   // Names the URL that answered, when there's more than one to pick from.
   const via = async (endpoint: Endpoint) => (alts.length ? ` (via ${await resolveBaseUrl(endpoint)})` : '');
 
-  const fetchModels = async () => {
+  const fetchModels = () => {
     if (!baseUrl.trim()) return setStatus({ ok: false, text: 'Enter a base URL first.' });
-    setBusy('fetch');
+    Keyboard.dismiss();
     setStatus(null);
-    try {
-      const endpoint = draft();
-      const { models: list, effortParam: detected } = await getAdapter(type).listModels(
-        endpoint,
-        apiKey.trim() || undefined
-      );
-      setModels(list.map((m) => m.id));
-      const found = Object.fromEntries(list.flatMap((m) => (m.efforts ? [[m.id, m.efforts]] : [])));
-      setEfforts(found);
-      setContexts(
-        Object.fromEntries(list.flatMap((m) => (m.contextLength && m.contextLength > 0 ? [[m.id, m.contextLength]] : [])))
-      );
-      if (detected) setEffortParam(detected);
-      const withEffort = Object.keys(found).length;
-      setStatus({
-        ok: true,
-        text:
-          `Found ${list.length} model${list.length === 1 ? '' : 's'}` +
-          (withEffort ? `, ${withEffort} with effort levels` : '') +
-          `${await via(endpoint)}.`,
-      });
-    } catch (e) {
-      setStatus({ ok: false, text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(null);
-    }
+    const endpoint = draft();
+    setLoadModels(() => async () => {
+      const result = await getAdapter(endpoint.type).listModels(endpoint, apiKey.trim() || undefined);
+      return { ...result, source: await via(endpoint) };
+    });
+  };
+
+  const addFetchedModels = (selected: ModelInfo[], result: FetchedProviderModels) => {
+    setLoadModels(null);
+    const next = appendFetchedModels({ models, efforts, contexts }, selected);
+    const count = next.models.length - models.length;
+    if (!count) return;
+    setModels(next.models);
+    setEfforts(next.efforts);
+    setContexts(next.contexts);
+    if (!models.length && result.effortParam) setEffortParam(result.effortParam);
+    setStatus({ ok: true, text: `Added ${count} model${count === 1 ? '' : 's'}${result.source ?? ''}.` });
   };
 
   const testConnection = async () => {
     if (!models.length) return setStatus({ ok: false, text: 'Add or fetch at least one model to test.' });
-    setBusy('test');
+    setTesting(true);
     setStatus(null);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
@@ -221,7 +222,7 @@ export default function EndpointScreen() {
       setStatus({ ok: false, text });
     } finally {
       clearTimeout(timeout);
-      setBusy(null);
+      setTesting(false);
     }
   };
 
@@ -233,22 +234,6 @@ export default function EndpointScreen() {
       if (guessed) setEfforts({ ...efforts, [m]: guessed });
     }
     setNewModel('');
-  };
-
-  const commitEdit = () => {
-    if (!editing) return;
-    setEditing(null);
-    if (editing.field === 'effort') {
-      const levels = [...new Set(editing.text.split(/[\s,]+/).filter(Boolean).map((l) => l.toLowerCase()))];
-      const { [editing.model]: _, ...rest } = efforts;
-      setEfforts(levels.length ? { ...rest, [editing.model]: levels } : rest);
-      return;
-    }
-    const { [editing.model]: _, ...rest } = budgets;
-    if (!editing.text.trim()) return setBudgets(rest);
-    const tokens = parseTokens(editing.text);
-    if (tokens) setBudgets({ ...rest, [editing.model]: tokens });
-    else Alert.alert('Invalid context budget', 'Enter a token count such as 32000, 128K or 1M.');
   };
 
   const remove = () =>
@@ -361,12 +346,8 @@ export default function EndpointScreen() {
 
         <View style={styles.modelsHeader}>
           <Label>Models ({models.length})</Label>
-          <Pressable onPress={fetchModels} disabled={!!busy} hitSlop={8} style={styles.inlineButton}>
-            {busy === 'fetch' ? (
-              <ActivityIndicator size="small" color={colors.link} />
-            ) : (
-              <Feather name="download-cloud" size={16} color={colors.link} />
-            )}
+          <Pressable onPress={fetchModels} disabled={testing || !!loadModels} hitSlop={8} style={styles.inlineButton}>
+            <Feather name="download-cloud" size={16} color={colors.link} />
             <Text style={{ color: colors.link, fontSize: 15, fontWeight: '500' }}>Fetch models</Text>
           </Pressable>
         </View>
@@ -385,87 +366,26 @@ export default function EndpointScreen() {
           </Pressable>
         </View>
 
-        {models.length > 0 && (
-          <Text style={[styles.hint, { color: colors.textTertiary }]}>
-            Tap a model to edit its effort levels, lowest first, or leave them empty to hide the effort control. Tap its
-            context budget to set how much history to keep, such as 128K or 1M; empty uses 75% of the reported window, or
-            32K when none is reported.
-          </Text>
-        )}
-
         {models.length > 10 && (
           <Input value={modelFilter} onChangeText={setModelFilter} placeholder="Filter models" style={{ marginTop: 8 }} />
         )}
 
         {models.length > 0 && (
-          <View style={[styles.modelList, { backgroundColor: colors.surface }]}>
-            {visibleModels.slice(0, 200).map((m, i) => (
-              <Pressable
-                key={m}
-                onPress={() => setEditing({ model: m, field: 'effort', text: (efforts[m] ?? []).join(', ') })}
-                style={[styles.modelRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text numberOfLines={1} style={[styles.modelName, { color: colors.text }]}>
-                    {m}
-                  </Text>
-                  {editing?.model === m && editing.field === 'effort' ? (
-                    <Input
-                      autoFocus
-                      value={editing.text}
-                      onChangeText={(text) => setEditing({ ...editing, text })}
-                      onSubmitEditing={commitEdit}
-                      onBlur={commitEdit}
-                      placeholder="low, medium, high"
-                      returnKeyType="done"
-                      style={[styles.effortInput, { backgroundColor: colors.background }]}
-                    />
-                  ) : (
-                    <Text numberOfLines={1} style={[styles.effortLevels, { color: colors.textTertiary }]}>
-                      {efforts[m]?.length ? `Effort: ${efforts[m].join(' · ')}` : 'No effort control'}
-                    </Text>
-                  )}
-                  {editing?.model === m && editing.field === 'budget' ? (
-                    <Input
-                      autoFocus
-                      value={editing.text}
-                      onChangeText={(text) => setEditing({ ...editing, text })}
-                      onSubmitEditing={commitEdit}
-                      onBlur={commitEdit}
-                      placeholder="128K, 1M… (empty for auto)"
-                      returnKeyType="done"
-                      style={[styles.effortInput, { backgroundColor: colors.background }]}
-                    />
-                  ) : (
-                    <Pressable
-                      onPress={() => {
-                        // Show the short form only when it reads back as the same number.
-                        const short = budgets[m] ? formatTokens(budgets[m]) : '';
-                        const text = !short || parseTokens(short) === budgets[m] ? short : String(budgets[m]);
-                        setEditing({ model: m, field: 'budget', text });
-                      }}
-                      hitSlop={4}
-                      style={{ alignSelf: 'flex-start' }}
-                    >
-                      <Text numberOfLines={1} style={[styles.effortLevels, { color: colors.textTertiary }]}>
-                        Context budget: {formatTokens(resolveBudget({ baseUrl, contexts, budgets }, m))}
-                        {budgets[m] ? '' : ' (auto)'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-                <Pressable onPress={() => setModels(models.filter((x) => x !== m))} hitSlop={8}>
-                  <Feather name="x" size={16} color={colors.textTertiary} />
-                </Pressable>
-              </Pressable>
-            ))}
-            {visibleModels.length > 200 && (
-              <Text style={[styles.hint, { color: colors.textTertiary, padding: 12 }]}>
-                {visibleModels.length - 200} more. Use the filter to find them.
-              </Text>
-            )}
-          </View>
+          <ModelSettingsList
+            models={visibleModels}
+            type={type}
+            baseUrl={baseUrl}
+            budgets={budgets}
+            contexts={contexts}
+            efforts={efforts}
+            options={modelOptions}
+            setModels={setModels}
+            setBudgets={setBudgets}
+            setEfforts={setEfforts}
+            setOptions={setModelOptions}
+          />
         )}
+
         {models.length > 10 && (
           <Pressable
             onPress={() =>
@@ -493,7 +413,7 @@ export default function EndpointScreen() {
               <Text style={[styles.hint, { color: colors.textTertiary }]}>
                 {effortParam === 'chat_template_kwargs'
                   ? 'Sent as chat_template_kwargs: levels "off" and "on" set enable_thinking, any other level sets reasoning_effort (gpt-oss).'
-                  : 'How the server takes the effort level. Detected when you fetch models.'}
+                  : 'How the server takes the effort level. Detected when you import your first models.'}
               </Text>
             </>
           )}
@@ -512,10 +432,10 @@ export default function EndpointScreen() {
         <Animated.View layout={LinearTransition.duration(220)}>
           <Pressable
             onPress={testConnection}
-            disabled={!!busy}
+            disabled={testing}
             style={({ pressed }) => [styles.button, { borderColor: colors.border }, pressed && { opacity: 0.6 }]}
           >
-            {busy === 'test' ? (
+            {testing ? (
               <ActivityIndicator size="small" color={colors.text} />
             ) : (
               <Feather name="zap" size={16} color={colors.text} />
@@ -544,6 +464,14 @@ export default function EndpointScreen() {
           )}
         </Animated.View>
       </ScrollView>
+      {loadModels && (
+        <FetchModelsDialog
+          load={loadModels}
+          addedModels={models}
+          onAdd={addFetchedModels}
+          onClose={() => setLoadModels(null)}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -559,11 +487,6 @@ const styles = StyleSheet.create({
   addUrl: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 10, marginHorizontal: 4 },
   removeUrl: { width: 32, height: 44, alignItems: 'center', justifyContent: 'center' },
   addButton: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  modelList: { borderRadius: 12, marginTop: 8, overflow: 'hidden' },
-  modelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
-  modelName: { fontSize: 15, fontFamily: fonts.mono },
-  effortLevels: { fontSize: 13, marginTop: 3 },
-  effortInput: { marginTop: 8, paddingVertical: 8, fontSize: 14 },
   button: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -25,6 +25,9 @@ const IMAGE_TOKENS = 1500;
 
 // Providers that take binary non-image attachments inline (PDFs and the like).
 const BINARY_FILE_PROVIDERS: ProviderType[] = ['anthropic', 'gemini', 'claude', 'antigravity'];
+const VIDEO_MIME_BY_EXTENSION = new Map([
+  ['mp4', 'video/mp4'], ['mov', 'video/quicktime'], ['webm', 'video/webm'], ['mpeg', 'video/mpeg'], ['mpg', 'video/mpeg'],
+]);
 
 export const tokensOf = (s: string) => Math.ceil(s.length / CHARS_PER_TOKEN);
 
@@ -169,6 +172,7 @@ function summaryText(block: CompressionBlock, label: string) {
 
 type WireOptions = {
   endpointType: ProviderType;
+  mediaInputs?: { image: boolean; video: boolean };
   /** Without tools, calls are folded into text: APIs reject tool turns when no tools are offered. */
   withTools: boolean;
   /** Tags units with their refs so the model can compress them. */
@@ -189,26 +193,33 @@ async function userToWire(unit: Unit, opts: WireOptions): Promise<WireMessage> {
 
 ${part.context}`;
     else if (part.type === 'image') {
-      const base64 = await opts.readBase64(part.file);
+      const base64 = opts.mediaInputs?.image === false ? null : await opts.readBase64(part.file);
       // A missing attachment file sends the text alone rather than failing the request.
       if (base64) images.push({ base64, mimeType: part.mimeType });
       if (part.path) text += `\n\n[Attached image saved in the workspace as "${part.path}".]`;
+      else if (opts.mediaInputs?.image === false) text += '\n\n[Image input is disabled for this model.]';
     } else if (part.type === 'file') {
       const saved = part.path ? ` (saved in the workspace as "${part.path}")` : '';
       if (part.text != null) {
         // Text-like file: inline it so every provider can read it.
         text += `\n\nAttached file "${part.name}"${saved}:\n\n${part.text}`;
       } else if (part.file) {
-        const base64 = await opts.readBase64(part.file);
-        if (!base64) {
+        const extension = part.name.match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase() ?? '';
+        const mimeType = part.mimeType === 'application/octet-stream'
+          ? VIDEO_MIME_BY_EXTENSION.get(extension) ?? part.mimeType
+          : part.mimeType;
+        const isVideo = mimeType.startsWith('video/');
+        const inline = isVideo && opts.mediaInputs ? opts.mediaInputs.video : BINARY_FILE_PROVIDERS.includes(opts.endpointType);
+        const base64 = inline ? await opts.readBase64(part.file) : null;
+        if (inline && !base64) {
           text += `\n\n[Attached file "${part.name}" is no longer available.]`;
-        } else if (BINARY_FILE_PROVIDERS.includes(opts.endpointType)) {
-          files.push({ name: part.name, mimeType: part.mimeType, base64 });
+        } else if (base64) {
+          files.push({ name: part.name, mimeType, base64 });
           if (saved) text += `\n\n[Attached file "${part.name}"${saved}.]`;
         } else if (saved) {
-          text += `\n\n[Attached ${part.mimeType} file "${part.name}"${saved}. Open it with read_file or a script.]`;
+          text += `\n\n[Attached ${mimeType} file "${part.name}"${saved}. Open it with read_file or a script.]`;
         } else {
-          text += `\n\n[Attached ${part.mimeType} file "${part.name}" — this endpoint cannot receive binary files.]`;
+          text += `\n\n[Attached ${mimeType} file "${part.name}" — this model cannot receive it directly.]`;
         }
       }
     }
@@ -230,7 +241,7 @@ async function stepToWire(unit: Unit, opts: WireOptions): Promise<WireMessage[]>
   const results = await Promise.all(
     calls.map(async (c, i) => {
       const images: WireImage[] = [];
-      for (const img of c.images ?? []) {
+      for (const img of opts.mediaInputs?.image === false ? [] : c.images ?? []) {
         const base64 = await opts.readBase64(img.file);
         if (base64) images.push({ base64, mimeType: img.mimeType });
       }
