@@ -1,3 +1,10 @@
+# Clanker 1.3.0-beta.11
+
+- **Settings → Appearance** has a **Text selection** toggle (off by default). Off, holding a message copies it whole, as before. On, holding selects chat text across paragraphs, code and lists, with **Ask Clanker** beside Copy.
+- Sideways scrolling finally beats the drawer: while a finger is on a code block, a table or the composer's attachments, a horizontal swipe scrolls the content instead of opening the sidebar.
+
+---
+
 # Clanker 1.3.0-beta.10
 
 - **Fetch models** opens a picker with all new models selected. Choose individual models or toggle the whole list before adding them. Existing models keep their settings.
