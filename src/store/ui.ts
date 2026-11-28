@@ -32,6 +32,12 @@ interface UIState extends ChatView {
   webTouch: boolean;
   setWebTouch: (on: boolean) => void;
   /**
+   * A finger is on a sideways scroller (code, a table, chips): the drawer doesn't open, so the
+   * swipe scrolls the content instead, whichever gesture would have won the race otherwise.
+   */
+  hScrollTouch: boolean;
+  setHScrollTouch: (on: boolean) => void;
+  /**
    * Screens pushed over the main chat screen (a project page, a project's chat) each show their
    * own chat view. Each layer keeps the view beneath it, put back when the layer is popped.
    */
@@ -63,6 +69,8 @@ export const useUI = create<UIState>()((set, get) => ({
   effortOpen: false,
   webTouch: false,
   setWebTouch: (webTouch) => set({ webTouch }),
+  hScrollTouch: false,
+  setHScrollTouch: (hScrollTouch) => set({ hScrollTouch }),
   newChatMemoryOff: false,
   newChatProjectId: null,
   layers: [],

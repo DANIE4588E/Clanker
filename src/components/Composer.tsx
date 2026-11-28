@@ -2,7 +2,7 @@ import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from '@/lib/haptics';
 import { Image } from 'expo-image';
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type HostInstance, type TextInputInstance } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Keyboard, Pressable, StyleSheet, Text, TextInput, View, type HostInstance, type TextInputInstance } from 'react-native';
 import Animated, { Easing, interpolate, useAnimatedStyle, withTiming, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AttachmentMenu, type AttachAction } from '@/components/AttachmentMenu';
@@ -26,6 +26,7 @@ import {
 import { CONTEXT_METER_WIDTH, ContextMeter, ContextPopover } from '@/components/ContextUsage';
 import { EFFORT_METER_EXTENT, EffortMeter } from '@/components/EffortMeter';
 import { FileIcon } from '@/components/FileIcon';
+import { HorizontalScroll } from '@/components/HorizontalScroll';
 import { measureInOverlay } from '@/components/OverlayHost';
 import { QUOTA_METER_WIDTH, QuotaMeter, QuotaPopover, quotaMeterLabel } from '@/components/QuotaUsage';
 import type { AttachmentPart, FilePart, ImagePart } from '@/lib/providers';
@@ -446,7 +447,7 @@ export function Composer({
         style={[styles.box, { backgroundColor: colors.composer }, boxStyle]}
       >
         {(attachments.length > 0 || quotes.length > 0 || importing) && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.thumbs}>
+          <HorizontalScroll contentContainerStyle={styles.thumbs}>
             {quotes.map((q, i) => (
               <View key={`${i}-${q}`} style={[styles.quote, { backgroundColor: colors.surface }]}>
                 <Feather name="corner-down-right" size={14} color={colors.textSecondary} />
@@ -495,7 +496,7 @@ export function Composer({
                 <ActivityIndicator color={colors.textSecondary} />
               </View>
             )}
-          </ScrollView>
+          </HorizontalScroll>
         )}
 
       <Animated.View style={inputStyle}>
