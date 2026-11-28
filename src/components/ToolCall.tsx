@@ -15,7 +15,7 @@ import { useWorkspace } from '@/lib/useWorkspace';
 import { CodeBlock } from './CodeBlock';
 import { NestedScroll } from './NestedScroll';
 import { pluginOfTool, pluginTools } from '@/lib/plugins/catalog';
-import { areasSelect, SelectionArea, useSelectable } from './SelectionArea';
+import { areasSelect, SelectionArea, useSelectable, useTextSelection } from './SelectionArea';
 
 const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   ask_user: 'help-circle',
@@ -177,6 +177,8 @@ export function FileChips({ files }: { files: string[] }) {
 
 function ToolCallInner({ part, showImages = true }: { part: ToolPart; showImages?: boolean }) {
   const { colors } = useTheme();
+  // Inside the selection area: plain where the native scope does the selecting.
+  const selectable = useTextSelection() && !areasSelect;
   const [open, setOpen] = useState(false);
   const job = part.background;
   const writing = part.status === 'writing';
@@ -226,7 +228,7 @@ function ToolCallInner({ part, showImages = true }: { part: ToolPart; showImages
         <SelectionArea style={[styles.details, { borderLeftColor: colors.border }]}>
           {part.name === 'compress' && Array.isArray(part.input.ranges) ? (
             (part.input.ranges as { from?: string; to?: string; summary?: string }[]).map((r, i) => (
-              <Text key={i} selectable={!areasSelect} style={[styles.summary, { color: colors.textSecondary }]}>
+              <Text key={i} selectable={selectable} style={[styles.summary, { color: colors.textSecondary }]}>
                 <Text style={{ fontWeight: '600' }}>{r.to && r.to !== r.from ? `${r.from}–${r.to}` : r.from}: </Text>
                 {r.summary}
               </Text>
@@ -236,7 +238,7 @@ function ToolCallInner({ part, showImages = true }: { part: ToolPart; showImages
           )}
           {output != null && (
             <NestedScroll style={[styles.output, { backgroundColor: colors.codeBg }]} contentContainerStyle={styles.outputContent}>
-              <Text selectable={!areasSelect} style={[styles.mono, { color: failed ? colors.danger : colors.text }]}>
+              <Text selectable={selectable} style={[styles.mono, { color: failed ? colors.danger : colors.text }]}>
                 {output.length > 20_000 ? output.slice(0, 20_000) + '\n…' : output || '(no output)'}
               </Text>
             </NestedScroll>

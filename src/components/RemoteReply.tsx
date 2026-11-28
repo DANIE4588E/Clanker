@@ -6,9 +6,11 @@ import { adapterForChat, resumeRemoteChat } from '@/lib/remote/chat';
 import { type RemoteControl, type RemoteFile, type RemoteReply as Reply } from '@/lib/remote/types';
 import { useChats } from '@/store/chats';
 import { useTheme } from '@/lib/theme';
+import { useTextSelection } from './SelectionArea';
 
 function Control({ chatId, control }: { chatId: string; control: RemoteControl }) {
   const { colors } = useTheme();
+  const textSelects = useTextSelection();
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const respond = async (value: string) => {
@@ -21,7 +23,7 @@ function Control({ chatId, control }: { chatId: string; control: RemoteControl }
   };
   return (
     <View style={{ gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 14 }}>
-      <Text selectable style={{ color: colors.text }}>{control.prompt}</Text>
+      <Text selectable={textSelects} style={{ color: colors.text }}>{control.prompt}</Text>
       {control.kind === 'clarification' && <Input multiline placeholder="Your answer" value={answer} onChangeText={setAnswer} />}
       <View style={{ flexDirection: 'row', gap: 24 }}>
         {[...(control.choices ?? []), ...(control.kind === 'clarification' ? ['Send answer'] : [])].map((choice) => <Pressable key={choice} disabled={busy || (choice === 'Send answer' && !answer.trim())} onPress={() => void respond(choice === 'Send answer' ? answer : choice)} accessibilityRole="button"><Text style={{ color: colors.link }}>{busy ? 'Sending…' : choice === 'once' ? 'Allow once' : choice === 'deny' ? 'Deny' : choice}</Text></Pressable>)}

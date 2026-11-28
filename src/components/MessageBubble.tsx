@@ -27,7 +27,7 @@ import { FileIcon } from './FileIcon';
 import { useFindMarker } from './FindHighlight';
 import { brandOfModel, friendlyModelName } from '@/lib/modelNames';
 import { RemoteReply } from './RemoteReply';
-import { areasSelect, SelectionArea } from './SelectionArea';
+import { areasSelect, SelectionArea, useSelectable, useTextSelection } from './SelectionArea';
 import { ChatImage } from './ImageCards';
 import { Markdown, markdownImageSources } from './Markdown';
 import { ReplyProvider } from './study/shared';
@@ -444,8 +444,9 @@ const ThoughtChunk = memo(function ThoughtChunk({
   fadeInitial: boolean;
 }) {
   const content = useFadeText(text, live, color, { fadeInitial });
+  const selectable = useSelectable();
   return (
-    <Text selectable={!areasSelect} style={[styles.thoughtsText, { color }]}>
+    <Text selectable={selectable} style={[styles.thoughtsText, { color }]}>
       {content}
     </Text>
   );
@@ -519,6 +520,10 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
   const activity = useActivityLabel(message.status === 'streaming' ? localModel : undefined);
   // Find in chat's matches, marked in the user's text (replies mark theirs in Markdown).
   const mark = useFindMarker();
+  // Whether the user's own text selects (the setting): a Text inside the selection area stays
+  // plain where the native scope does the selecting.
+  const textSelects = useTextSelection();
+  const selectable = textSelects && !areasSelect;
   const stats = formatStats(message.stats, { speed: showSpeed, cache: showCache });
   // A reply that worked for long has hundreds of parts, and it renders again with every streamed
   // token: what's read off its parts is worked out again only when they change.
@@ -584,10 +589,13 @@ function MessageBubbleInner({ conversationId, message, isLast, onRegenerate, onE
           </View>
         ))}
         {!!asked && (
-          // Held, the text selects where it can; otherwise holding copies it all.
-          <Pressable onLongPress={areasSelect ? undefined : copy} style={[styles.userBubble, { backgroundColor: colors.userBubble }]}>
+          // Held, the text selects where it can; where nothing selects (the setting off), holding copies it all.
+          <Pressable
+            onLongPress={textSelects && areasSelect ? undefined : copy}
+            style={[styles.userBubble, { backgroundColor: colors.userBubble }]}
+          >
             <SelectionArea>
-              <Text selectable={!areasSelect} style={[styles.userText, { color: colors.text }]}>
+              <Text selectable={selectable} style={[styles.userText, { color: colors.text }]}>
                 {mentionSpans(asked, sentLabels(mentions)).map((s, i) =>
                   s.mention ? (
                     <Text key={i} style={{ color: colors.accentText }}>

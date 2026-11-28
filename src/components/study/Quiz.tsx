@@ -6,6 +6,7 @@ import * as Haptics from '@/lib/haptics';
 import { gradeQuizAnswer, type QuizGrade } from '@/lib/quizGrading';
 import { useTheme } from '@/lib/theme';
 import { CardTitle, hashKey, IconButton, Pager, parseLoose, PillButton, RichText, str, StudyCard, useFollowUp, useSticky, useStudyReply } from './shared';
+import { useTextSelection } from '../SelectionArea';
 
 type Question = { question: string; hint?: string } & (
   | { type: 'multiple-choice'; options: { text: string; explanation?: string }[]; answer: number }
@@ -143,6 +144,7 @@ function Results({ quiz, state, restart }: { quiz: QuizSpec; state: QuizState; r
 
 function QuizCard({ quiz, progressKey, conversationId }: { quiz: QuizSpec; progressKey: string; conversationId?: string }) {
   const { colors } = useTheme();
+  const textSelects = useTextSelection();
   const count = quiz.questions.length;
   const fresh = (): QuizState => ({
     index: 0, responses: Array(count).fill(null), drafts: Array(count).fill(''), hints: Array(count).fill(false), done: false,
@@ -289,7 +291,7 @@ function QuizCard({ quiz, progressKey, conversationId }: { quiz: QuizSpec; progr
               <Text accessibilityLiveRegion="polite" style={[styles.feedback, { color: response.grade.correct ? colors.success : colors.danger }]}>
                 {response.grade.correct ? 'Correct' : 'Incorrect'}
               </Text>
-              <Text selectable style={[styles.explanation, { color: colors.text }]}>
+              <Text selectable={textSelects} style={[styles.explanation, { color: colors.text }]}>
                 {response.answer}
               </Text>
               {!response.grade.correct && (

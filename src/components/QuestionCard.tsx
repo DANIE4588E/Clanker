@@ -5,6 +5,7 @@ import * as Haptics from '@/lib/haptics';
 import type { ToolPart } from '@/lib/providers';
 import { useTheme } from '@/lib/theme';
 import { answerQuestions, questionsOf, skipQuestions } from '@/lib/tools/ask';
+import { useTextSelection } from './SelectionArea';
 
 /**
  * An ask_user call waiting on the user: options to pick and a box for answers in their own words.
@@ -12,6 +13,7 @@ import { answerQuestions, questionsOf, skipQuestions } from '@/lib/tools/ask';
  */
 function QuestionCardInner({ part }: { part: ToolPart }) {
   const { colors } = useTheme();
+  const textSelects = useTextSelection();
   const questions = useMemo(() => questionsOf(part.input), [part.input]);
   const [picked, setPicked] = useState<string[][]>(() => questions.map(() => []));
   const [typed, setTyped] = useState<string[]>(() => questions.map(() => ''));
@@ -49,7 +51,7 @@ function QuestionCardInner({ part }: { part: ToolPart }) {
       {questions.map((q, i) => (
         <View key={i} style={styles.question}>
           {!!q.header && <Text style={[styles.header, { color: colors.textTertiary }]}>{q.header}</Text>}
-          <Text selectable style={[styles.prompt, { color: colors.text }]}>
+          <Text selectable={textSelects} style={[styles.prompt, { color: colors.text }]}>
             {q.question}
           </Text>
           {q.multiSelect && <Text style={[styles.hint, { color: colors.textTertiary }]}>Pick any that apply</Text>}

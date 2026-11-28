@@ -24,7 +24,7 @@ const DETAIL_FOOTERS: Record<ChatDetail, string> = {
   verbose: 'Every step and thought shows, and stays open until you fold it.',
 };
 
-/** Settings → Appearance: theme, model names, the new chat screen and what shows alongside replies. */
+/** Settings → Appearance: theme, model names, the new chat screen, chat text selection and what shows alongside replies. */
 export default function AppearanceScreen() {
   const { colors } = useTheme();
   const theme = useSettings((s) => s.theme);
@@ -39,6 +39,8 @@ export default function AppearanceScreen() {
   const setCacheHits = useSettings((s) => s.setCacheHits);
   const activityCalendar = useSettings((s) => s.activityCalendar);
   const setActivityCalendar = useSettings((s) => s.setActivityCalendar);
+  const textSelection = useSettings((s) => s.textSelection);
+  const setTextSelection = useSettings((s) => s.setTextSelection);
   const chatDetail = useSettings((s) => s.chatDetail);
   const setChatDetail = useSettings((s) => s.setChatDetail);
 
@@ -67,6 +69,16 @@ export default function AppearanceScreen() {
           detail="Show your recent token use on the new chat screen"
           value={activityCalendar}
           onValueChange={setActivityCalendar}
+        />
+      </Section>
+
+      <Section title="Chat">
+        <ToggleRow
+          icon="type"
+          title="Text selection"
+          detail="Hold chat text to select it, copy it or ask Clanker about it"
+          value={textSelection}
+          onValueChange={setTextSelection}
         />
       </Section>
 

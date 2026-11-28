@@ -81,6 +81,8 @@ interface SettingsState {
   titleGeneration: boolean;
   /** Whether new chats show automatically generated prompt suggestions. */
   suggestions: boolean;
+  /** Whether chat text can be selected by holding it (to copy it or ask about it). */
+  textSelection: boolean;
   /** The model that names chats, or null for the chat's own model. */
   titleModel: ModelRef | null;
   /** The model that writes prompt suggestions, or null for the selected model. */
@@ -117,6 +119,7 @@ interface SettingsState {
   setShowArchived: (on: boolean) => void;
   setTitleGeneration: (on: boolean) => void;
   setSuggestions: (on: boolean) => void;
+  setTextSelection: (on: boolean) => void;
   setTitleModel: (ref: ModelRef | null) => void;
   setSuggestionModel: (ref: ModelRef | null) => void;
   setMemoryModel: (ref: ModelRef | null) => void;
@@ -152,6 +155,7 @@ export const useSettings = create<SettingsState>()(
       showArchived: false,
       titleGeneration: true,
       suggestions: true,
+      textSelection: false,
       titleModel: null,
       suggestionModel: null,
       memoryModel: null,
@@ -220,6 +224,7 @@ export const useSettings = create<SettingsState>()(
       setShowArchived: (showArchived) => set({ showArchived }),
       setTitleGeneration: (titleGeneration) => set({ titleGeneration }),
       setSuggestions: (suggestions) => set({ suggestions }),
+      setTextSelection: (textSelection) => set({ textSelection }),
       setTitleModel: (titleModel) => set({ titleModel }),
       setSuggestionModel: (suggestionModel) => set({ suggestionModel }),
       setMemoryModel: (memoryModel) => set({ memoryModel }),
