@@ -29,7 +29,7 @@ Never install a test build over the user's real Clanker app (`com.danie4588e.Cla
 
 Don't use `npx expo run:android` for this either: it installs over adb and starts an emulator when no phone is connected. Build the APK with Gradle; the user installs it on the phone by tapping it (no adb, no emulator).
 
-**1. Build the preview dev APK** (in one PowerShell window, from the project root; replace `<version>` with `expo.version` from `app.json`):
+**1. Build the preview dev APK.** Run these commands in one PowerShell window from the project root. The APK filename uses `expo.version` from `app.json`.
 
 ```powershell
 $env:APP_VARIANT = 'preview'
@@ -38,7 +38,9 @@ Select-String -Path android\app\build.gradle -Pattern 'applicationId'   # must s
 cd android
 .\gradlew.bat assembleDebug
 cd ..
-Copy-Item android\app\build\outputs\apk\debug\app-debug.apk builds\clanker-preview-dev-<version>.apk
+$version = (Get-Content -Raw app.json | ConvertFrom-Json).expo.version
+New-Item -ItemType Directory -Path builds -Force | Out-Null
+Copy-Item android\app\build\outputs\apk\debug\app-debug.apk "builds\clanker-preview-dev-$version.apk"
 ```
 
 In Bash, prefix each `npx expo` command with `APP_VARIANT=preview` and run `./gradlew assembleDebug` in `android/`.

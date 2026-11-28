@@ -113,12 +113,14 @@ The regular and preview builds share the `clanker` scheme, so with both installe
 
 ```sh
 npm install
-npx expo start
+npx expo start --go
 ```
 
 Scan the QR code with Expo Go, then open **Settings → Add endpoint**.
 
-For a local Ollama or LM Studio server, use your computer's LAN IP (not `localhost`) and make sure the server listens on all interfaces (`OLLAMA_HOST=0.0.0.0`). Plain-HTTP endpoints are allowed by the app config, which takes effect in development/production builds (`npx expo run:android` / `run:ios` or EAS).
+For a development build on an Android phone, follow the [Clanker Preview build and install steps](AGENTS.md#dev-builds-on-a-device-always-use-the-preview-variant). Clanker Preview installs alongside regular Clanker and keeps separate chats and settings.
+
+For a local Ollama or LM Studio server, use your computer's LAN IP (not `localhost`) and make sure the server listens on all interfaces (`OLLAMA_HOST=0.0.0.0`). The app config allows plain-HTTP endpoints in development and production builds.
 
 ## Build Android APK
 
